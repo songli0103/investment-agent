@@ -33,8 +33,6 @@ from alphaquant.main import run_analysis_async
 from alphaquant.models.report import InvestmentReport
 
 
-st.set_page_config(page_title="Compare", layout="wide")
-
 st.title("Compare")
 st.write(
     "Enter up to 5 tickers (comma-separated) to run analyses in parallel and "

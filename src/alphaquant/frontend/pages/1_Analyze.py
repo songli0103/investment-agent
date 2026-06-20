@@ -20,8 +20,6 @@ from alphaquant.frontend.db import DB
 from alphaquant.main import run_analysis_async
 
 
-st.set_page_config(page_title="Analyze", layout="wide")
-
 st.title("Analyze")
 st.write(
     "Enter a stock ticker to generate a full investment research report. "

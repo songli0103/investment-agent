@@ -10,8 +10,6 @@ from alphaquant.frontend.components.charts import render_history_lines
 from alphaquant.frontend.db import DB
 
 
-st.set_page_config(page_title="History", layout="wide")
-
 st.title("History")
 st.write(
     "Browse past analysis runs. Pick a subset of tickers and a start date in the "

@@ -12,8 +12,6 @@ import streamlit as st
 
 from alphaquant.frontend.db import DB
 
-st.set_page_config(page_title="Settings", layout="wide")
-
 st.title("Settings")
 
 db = DB()
