@@ -182,7 +182,7 @@ if not successful:
         elif isinstance(exc, AllDataSourcesDown):
             st.error(f"{ticker}: all data sources unavailable.")
         else:
-            st.error(f"{ticker}: {type(exc).__name__}: {exc}")
+            st.error(f"{ticker}: analysis failed. See server logs for details.")
     st.stop()
 
 # Show any per-ticker failures (partial success path).
@@ -194,7 +194,7 @@ for ticker, exc in failures:
     elif isinstance(exc, AllDataSourcesDown):
         st.error(f"{ticker}: all data sources unavailable.")
     else:
-        st.warning(f"{ticker}: {type(exc).__name__}: {exc}")
+        st.warning(f"{ticker}: analysis failed. See server logs for details.")
 
 # Rating cards in a row of equal-width columns.
 st.subheader("Ratings")
