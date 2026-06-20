@@ -66,7 +66,7 @@ try:
         mime="application/jsonl",
     )
 except Exception as exc:  # pragma: no cover - export best-effort
-    st.error(f"Failed to build JSONL export: {type(exc).__name__}: {exc}")
+    st.error("Failed to build JSONL export. See server logs.")
 
 # --- Service ------------------------------------------------------------
 st.subheader("Service")
@@ -86,8 +86,8 @@ try:
         st.write("**MINIMAX_API_KEY:** set")
 except Exception as exc:
     st.error(
-        f"Could not load service configuration: {type(exc).__name__}: {exc}. "
-        "Check that `.env` exists and contains MINIMAX_API_KEY."
+        "Could not load service configuration. Check that `.env` exists "
+        "and contains MINIMAX_API_KEY."
     )
 
 st.write("**FastAPI docs:** http://localhost:8000/docs")
