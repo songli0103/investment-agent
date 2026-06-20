@@ -74,8 +74,12 @@ def main() -> int:
     # Assertion 6: Markdown non-trivial
     assert_(len(report.markdown) > 500, f"Markdown has {len(report.markdown)} chars (>500)")
 
-    # Assertion 7: Sources cited
-    assert_(len(report.sources) > 0, f"Report cites {len(report.sources)} sources")
+    # Assertion 7: Sources cited (and not just the "degraded" status marker).
+    sources = [s for s in report.sources if s != "degraded"]
+    assert_(
+        len(sources) >= 1,
+        f"Report cites {len(sources)} non-degraded sources: {report.sources}",
+    )
 
     print(f"\n=== ✅ SMOKE PASSED ===")
     print(f"Report ID: {report.report_id}")

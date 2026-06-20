@@ -128,6 +128,35 @@ def _gics_peers_for(company: Any, ticker: str) -> list[Competitor]:
     ]
 
 
+def _collect_sources(
+    market: MarketData | None,
+    news: NewsAnalysis | None,
+    financial: FinancialStatements | None,
+    competitor: CompetitorAnalysis | None,
+) -> list[str]:
+    """Compose ``InvestmentReport.sources`` from non-trivial upstreams.
+
+    Excludes the literal ``"degraded"`` (a status, not a source) and dedupes
+    while preserving first-seen order. Competitor sources are reported as
+    ``"gics_peers"`` when the method is ``"gics"``; otherwise the underlying
+    method is recorded.
+    """
+    raw: list[str] = []
+    if market is not None and market.source and market.source != "degraded":
+        raw.append(market.source)
+    if news is not None and news.source:
+        raw.append(news.source)
+    if financial is not None and financial.source:
+        raw.append(financial.source)
+    if competitor is not None:
+        if competitor.method == "gics":
+            raw.append("gics_peers")
+        elif competitor.method:
+            raw.append(competitor.method)
+    # dict.fromkeys preserves insertion order while deduping.
+    return list(dict.fromkeys(raw))
+
+
 class AnalysisFlow(Flow[AnalysisState]):
     """Top-level Flow orchestrating all 8 Agents."""
 
@@ -494,7 +523,12 @@ class AnalysisFlow(Flow[AnalysisState]):
                 confidence=confidence,
                 catalysts=[],
                 markdown=markdown,
-                sources=[market.source, self.state.news.source],
+                sources=_collect_sources(
+                    market,
+                    self.state.news,
+                    self.state.financial,
+                    self.state.competitor,
+                ),
             )
             log.info(
                 "flow_step_completed",
