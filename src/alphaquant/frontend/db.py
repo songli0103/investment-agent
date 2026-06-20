@@ -101,32 +101,6 @@ class DB:
             rows = conn.execute(sql, params).fetchall()
         return [self._row_to_record(row) for row in rows]
 
-    def get_latest_per_ticker(self) -> dict[str, ReportRecord]:
-        """Return the most recent ReportRecord for each ticker."""
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT r.id, r.ticker, r.generated_at, r.rating, r.confidence,
-                       r.market_price, r.report_json
-                FROM reports r
-                JOIN (
-                    SELECT ticker, MAX(generated_at) AS max_at
-                    FROM reports
-                    GROUP BY ticker
-                ) latest
-                  ON latest.ticker = r.ticker
-                 AND latest.max_at = r.generated_at
-                ORDER BY r.ticker ASC
-                """
-            ).fetchall()
-        result: dict[str, ReportRecord] = {}
-        for row in rows:
-            record = self._row_to_record(row)
-            existing = result.get(record.ticker)
-            if existing is None or record.id > existing.id:
-                result[record.ticker] = record
-        return result
-
     def delete_all(self) -> int:
         """Delete every row, returning the number deleted."""
         with self._connect() as conn:

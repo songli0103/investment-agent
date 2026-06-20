@@ -231,20 +231,6 @@ def test_get_history_filters_by_ticker_and_since(db: DB) -> None:
     assert len(all_since) == 2  # 1 AAPL + 1 MSFT on day 5
 
 
-def test_get_latest_per_ticker(db: DB) -> None:
-    db.insert_report("AAPL", _make_report(ticker="AAPL", generated_at=datetime(2026, 6, 1)))
-    db.insert_report("AAPL", _make_report(ticker="AAPL", generated_at=datetime(2026, 6, 10)))
-    db.insert_report("AAPL", _make_report(ticker="AAPL", generated_at=datetime(2026, 6, 5)))
-    db.insert_report("MSFT", _make_report(ticker="MSFT", generated_at=datetime(2026, 6, 8), price="300.00"))
-    db.insert_report("MSFT", _make_report(ticker="MSFT", generated_at=datetime(2026, 6, 15), price="310.00"))
-
-    latest = db.get_latest_per_ticker()
-    assert set(latest.keys()) == {"AAPL", "MSFT"}
-    assert latest["AAPL"].generated_at == datetime(2026, 6, 10)
-    assert latest["MSFT"].generated_at == datetime(2026, 6, 15)
-    assert latest["MSFT"].market_price == pytest.approx(310.0)
-
-
 def test_delete_all(db: DB) -> None:
     for day in range(1, 4):
         db.insert_report(
