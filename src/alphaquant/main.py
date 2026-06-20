@@ -1,19 +1,13 @@
-"""AlphaQuant entry points: run_analysis + FastAPI app."""
-from __future__ import annotations
+"""AlphaQuant FastAPI app.
 
-import asyncio
-from typing import Any
+The shared analysis core lives in ``alphaquant.core`` to avoid a circular
+import with the route module (which also needs to call the core).
+"""
+from __future__ import annotations
 
 from fastapi import FastAPI
 
 from alphaquant.api.routes import router
-from alphaquant.exceptions import (
-    AllDataSourcesDown,
-    InvalidTickerFormat,
-    TickerNotFound,
-)
-from alphaquant.flows import AnalysisFlow
-from alphaquant.models.report import InvestmentReport
 
 VERSION = "1.0.0"
 
@@ -25,15 +19,7 @@ app = FastAPI(
 app.include_router(router, prefix="/api/v1")
 
 
-async def run_analysis_async(ticker: str) -> InvestmentReport:
-    """Run the full analysis flow. Async entry for FastAPI."""
-    flow = AnalysisFlow()
-    flow.kickoff(inputs={"ticker": ticker})
-    if flow.state.report is None:
-        raise AllDataSourcesDown(f"Flow produced no report for {ticker}")
-    return flow.state.report
-
-
-def run_analysis(ticker: str) -> InvestmentReport:
-    """Run the full analysis flow. Sync entry for CLI."""
-    return asyncio.run(run_analysis_async(ticker))
+# Re-export the shared core so existing imports of
+# ``alphaquant.main.run_analysis`` / ``alphaquant.main.run_analysis_async``
+# continue to work.
+from alphaquant.core import run_analysis, run_analysis_async  # noqa: E402,F401

@@ -11,7 +11,7 @@ from alphaquant.exceptions import (
     InvalidTickerFormat,
     TickerNotFound,
 )
-from alphaquant.main import run_analysis
+from alphaquant.core import run_analysis
 
 
 def main() -> int:

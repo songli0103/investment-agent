@@ -188,11 +188,10 @@ def test_analyze_request_schema_rejects_bad_ticker():
 
 def test_analyze_endpoint_returns_report_on_success():
     report = _sample_report()
-    with patch("alphaquant.api.routes.AnalysisFlow") as MockFlow:
-        flow_instance = MockFlow.return_value
-        flow_instance.state.report = report
-        flow_instance.kickoff = lambda inputs: None  # no-op
+    from alphaquant.api import rate_limiter
 
+    rate_limiter.reset_rate_limiter()
+    with patch("alphaquant.api.routes.run_analysis_async", return_value=report) as mock:
         resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
 
     assert resp.status_code == 200
@@ -200,16 +199,14 @@ def test_analyze_endpoint_returns_report_on_success():
     assert body["status"] == "completed"
     assert body["report_id"] == report.report_id
     assert body["report"]["ticker"] == "AAPL"
+    mock.assert_called_once_with("AAPL")
 
 
 def test_analyze_endpoint_maps_invalid_ticker_to_400():
-    # Schema-level regex requires a well-formed ticker; the Flow raises for
-    # anything that *looks* valid at the schema layer but is rejected deeper.
-    with patch("alphaquant.api.routes.AnalysisFlow") as MockFlow:
-        flow_instance = MockFlow.return_value
-        flow_instance.kickoff = lambda inputs: (_ for _ in ()).throw(
-            InvalidTickerFormat("XYZ")
-        )
+    from alphaquant.api import rate_limiter
+
+    rate_limiter.reset_rate_limiter()
+    with patch("alphaquant.api.routes.run_analysis_async", side_effect=InvalidTickerFormat("XYZ")):
         resp = client.post("/api/v1/analyze", json={"ticker": "XYZ"})
 
     assert resp.status_code == 400
@@ -217,11 +214,10 @@ def test_analyze_endpoint_maps_invalid_ticker_to_400():
 
 
 def test_analyze_endpoint_maps_ticker_not_found_to_404():
-    with patch("alphaquant.api.routes.AnalysisFlow") as MockFlow:
-        flow_instance = MockFlow.return_value
-        flow_instance.kickoff = lambda inputs: (_ for _ in ()).throw(
-            TickerNotFound("ZZZZ")
-        )
+    from alphaquant.api import rate_limiter
+
+    rate_limiter.reset_rate_limiter()
+    with patch("alphaquant.api.routes.run_analysis_async", side_effect=TickerNotFound("ZZZZ")):
         resp = client.post("/api/v1/analyze", json={"ticker": "ZZZZ"})
 
     assert resp.status_code == 404
@@ -229,11 +225,13 @@ def test_analyze_endpoint_maps_ticker_not_found_to_404():
 
 
 def test_analyze_endpoint_maps_all_sources_down_to_503():
-    with patch("alphaquant.api.routes.AnalysisFlow") as MockFlow:
-        flow_instance = MockFlow.return_value
-        flow_instance.kickoff = lambda inputs: (_ for _ in ()).throw(
-            AllDataSourcesDown("everything is down")
-        )
+    from alphaquant.api import rate_limiter
+
+    rate_limiter.reset_rate_limiter()
+    with patch(
+        "alphaquant.api.routes.run_analysis_async",
+        side_effect=AllDataSourcesDown("everything is down"),
+    ):
         resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
 
     assert resp.status_code == 503
@@ -241,15 +239,54 @@ def test_analyze_endpoint_maps_all_sources_down_to_503():
 
 
 def test_analyze_endpoint_returns_500_when_no_report():
-    """If the Flow runs but produces no report, we return 500 INTERNAL_ERROR."""
-    with patch("alphaquant.api.routes.AnalysisFlow") as MockFlow:
-        flow_instance = MockFlow.return_value
-        flow_instance.state.report = None
-        flow_instance.kickoff = lambda inputs: None
+    """If the Flow runs but produces no report, the shared core raises
+    AllDataSourcesDown, which the route maps to 503. (The Flow itself is
+    responsible for synthesizing a report; an empty result means the synthesis
+    step failed.)"""
+    from alphaquant.api import rate_limiter
+
+    rate_limiter.reset_rate_limiter()
+    with patch(
+        "alphaquant.api.routes.run_analysis_async",
+        side_effect=AllDataSourcesDown("Flow produced no report for AAPL"),
+    ):
         resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
 
-    assert resp.status_code == 500
-    assert resp.json()["detail"]["code"] == "INTERNAL_ERROR"
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "ALL_DATA_SOURCES_DOWN"
+
+
+def test_rate_limiter_returns_429_after_burst():
+    """The token bucket allows 10 req/min per IP; the 11th request 429s."""
+    from alphaquant.api import rate_limiter
+
+    rate_limiter.reset_rate_limiter()
+    with patch("alphaquant.api.routes.run_analysis_async", return_value=_sample_report()):
+        for _ in range(10):
+            ok = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
+            assert ok.status_code == 200
+        blocked = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "RATE_LIMITED"
+
+
+def test_rate_limiter_resets_between_clients():
+    """The bucket is keyed by client IP; one client exhausting their quota
+    should not affect another. (TestClient uses a single IP, so we exercise
+    the underlying limiter directly with two distinct keys.)"""
+    from alphaquant.api.rate_limiter import TokenBucketRateLimiter
+
+    limiter = TokenBucketRateLimiter(capacity=2)
+    limiter.consume("client-a")
+    limiter.consume("client-a")
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        limiter.consume("client-a")
+    assert exc.value.status_code == 429
+    # client-b has its own bucket.
+    limiter.consume("client-b")  # no raise
 
 
 def test_analyze_response_schema():
@@ -277,10 +314,14 @@ def test_health_response_schema():
 
 def test_run_analysis_async_returns_report():
     report = _sample_report()
-    with patch("alphaquant.main.AnalysisFlow") as MockFlow:
+    with patch("alphaquant.core.AnalysisFlow") as MockFlow:
         flow_instance = MockFlow.return_value
         flow_instance.state.report = report
-        flow_instance.kickoff = lambda inputs: None
+
+        async def _fake_kickoff_with_timeout(inputs):
+            return None
+
+        flow_instance.kickoff_with_timeout = _fake_kickoff_with_timeout
 
         import asyncio
 
@@ -290,10 +331,14 @@ def test_run_analysis_async_returns_report():
 
 
 def test_run_analysis_async_raises_when_no_report():
-    with patch("alphaquant.main.AnalysisFlow") as MockFlow:
+    with patch("alphaquant.core.AnalysisFlow") as MockFlow:
         flow_instance = MockFlow.return_value
         flow_instance.state.report = None
-        flow_instance.kickoff = lambda inputs: None
+
+        async def _fake_kickoff_with_timeout(inputs):
+            return None
+
+        flow_instance.kickoff_with_timeout = _fake_kickoff_with_timeout
 
         import asyncio
 
@@ -304,7 +349,7 @@ def test_run_analysis_async_raises_when_no_report():
 def test_run_analysis_sync_wrapper():
     """The sync entry point is a thin asyncio.run wrapper around the async one."""
     report = _sample_report()
-    with patch("alphaquant.main.run_analysis_async", return_value=report) as mock:
+    with patch("alphaquant.core.run_analysis_async", return_value=report) as mock:
         result = run_analysis("AAPL")
     assert result is report
     mock.assert_called_once_with("AAPL")
@@ -318,8 +363,11 @@ def test_run_analysis_sync_wrapper():
 def test_cli_usage_errors_when_no_ticker(capsys):
     from alphaquant.cli import main
 
-    with pytest.raises(SystemExit) as exc:
-        main()
+    # Force an empty argv so argparse's "ticker required" branch fires,
+    # independent of any sys.argv leaked from prior tests.
+    with patch("sys.argv", ["alphaquant"]):
+        with pytest.raises(SystemExit) as exc:
+            main()
     assert exc.value.code == 2  # argparse exits with 2 on usage errors
 
 
