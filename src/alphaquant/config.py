@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     litellm_api_base: str = "https://api.minimax.chat/v1"
     litellm_timeout: int = 60
 
+    # Cost tracker pricing (USD per 1M tokens) — placeholder defaults; override via env.
+    # Env vars: MINIMAX_INPUT_PRICE_PER_M / MINIMAX_OUTPUT_PRICE_PER_M
+    minimax_input_price_per_m: float = 3.0
+    minimax_output_price_per_m: float = 15.0
+
     # Optional data sources
     alpha_vantage_api_key: str | None = None
     finnhub_api_key: str | None = None
