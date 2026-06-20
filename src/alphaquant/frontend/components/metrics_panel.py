@@ -25,6 +25,17 @@ def _fmt_market_cap(value: int) -> str:
     return f"${value:,}"
 
 
+def _fmt_revenue(value: Decimal) -> str:
+    """Format a Decimal revenue as $X.XB/T (rounded to 1 decimal)."""
+    billions = float(value) / 1e9
+    if billions >= 1000:
+        return f"${billions / 1000:.1f}T"
+    if billions >= 1:
+        return f"${billions:.1f}B"
+    millions = float(value) / 1e6
+    return f"${millions:.1f}M"
+
+
 def _fmt_ratio(value: float | None) -> str:
     if value is None:
         return "—"
@@ -80,6 +91,7 @@ def render_metrics_panel(report: InvestmentReport) -> None:
     rev_ttm = _compute_revenue_ttm(report)
 
     row2 = st.columns(3)
-    row2[0].metric("ROE", _fmt_ratio(roe) + "%" if roe is not None else "—")
+    roe_text = (_fmt_ratio(roe) + "%") if roe is not None else "—"
+    row2[0].metric("ROE", roe_text)
     row2[1].metric("Debt/Equity", _fmt_ratio(de))
-    row2[2].metric("Revenue TTM", _fmt_market_cap(int(rev_ttm)) if rev_ttm is not None else "—")
+    row2[2].metric("Revenue TTM", _fmt_revenue(rev_ttm) if rev_ttm is not None else "—")
