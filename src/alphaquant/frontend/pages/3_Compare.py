@@ -24,6 +24,7 @@ from alphaquant.exceptions import (
     TickerNotFound,
 )
 from alphaquant.frontend.components.charts import (
+    RADAR_AXES,
     RATING_TO_NUMERIC,
     _risk_axis_value,
 )
@@ -41,12 +42,6 @@ st.write(
 
 
 MAX_TICKERS = 5
-
-# Same 5 user-facing axes used by ``render_risk_radar``; we duplicate the
-# literal list here (rather than importing a private constant) to keep the
-# radar's axis order explicit and stable for this page. If the radar axes
-# change in ``charts.py``, update this list in lockstep.
-_RADAR_AXES = ["financial_health", "valuation", "competitive", "operational", "market"]
 
 
 db = DB()
@@ -100,12 +95,12 @@ def _build_metrics_row(report: InvestmentReport) -> dict[str, Any]:
 def _build_overlay_radar(reports: list[InvestmentReport]) -> go.Figure:
     """Return a single Figure with one Scatterpolar trace per report."""
     # Close the polygon by repeating the first axis/value.
-    closed_axes = _RADAR_AXES + [_RADAR_AXES[0]]
+    closed_axes = RADAR_AXES + [RADAR_AXES[0]]
 
     palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
     fig = go.Figure()
     for idx, report in enumerate(reports):
-        values = [_risk_axis_value(report.risk, axis) for axis in _RADAR_AXES]
+        values = [_risk_axis_value(report.risk, axis) for axis in RADAR_AXES]
         closed_values = values + [values[0]]
         fig.add_trace(
             go.Scatterpolar(

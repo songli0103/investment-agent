@@ -22,6 +22,14 @@ RATING_TO_NUMERIC: dict[str, int] = {
 # Axes shown on the risk radar. The backend RiskScore categories are
 # {financial, operational, market, regulatory, governance, macro}; we map them
 # onto the 5 user-facing axes specified in the brief.
+RADAR_AXES: list[str] = [
+    "financial_health",
+    "valuation",
+    "competitive",
+    "operational",
+    "market",
+]
+
 _RISK_AXIS_TO_CATEGORY: dict[str, str] = {
     "financial_health": "financial",
     "valuation": "financial",
@@ -42,7 +50,7 @@ def _risk_axis_value(risk: RiskAssessment, axis: str) -> int:
 
 def render_risk_radar(risk: RiskAssessment) -> go.Figure:
     """Return a 5-axis radar chart figure for the risk assessment."""
-    axes = ["financial_health", "valuation", "competitive", "operational", "market"]
+    axes = RADAR_AXES
     values = [_risk_axis_value(risk, a) for a in axes]
     # Close the polygon by repeating the first point.
     closed_axes = axes + [axes[0]]
