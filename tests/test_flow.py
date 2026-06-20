@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+# Suppress CrewAI's interactive "enable tracing?" prompt during tests.
+os.environ.setdefault("CREWAI_TESTING", "true")
+os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 from alphaquant.exceptions import AllDataSourcesDown, InvalidTickerFormat
 from alphaquant.flows import AnalysisFlow, AnalysisState
@@ -33,6 +38,11 @@ def _patch_competitor_tool(return_value):
         "alphaquant.tools.competitor_tool.CompetitorTool._run",
         new=fake_run,
     )
+
+
+def _run(coro):
+    """Drive an async step coroutine in tests (asyncio.run is forbidden in prod)."""
+    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +204,7 @@ class TestResolveCompany:
             "get_company",
             new=AsyncMock(return_value=sample_company),
         ):
-            flow.resolve_company("aapl")
+            _run(flow.resolve_company("aapl"))
         assert flow.state.ticker == "AAPL"
         assert flow.state.company == sample_company
 
@@ -206,7 +216,7 @@ class TestResolveCompany:
             new=AsyncMock(side_effect=AllDataSourcesDown("boom")),
         ):
             with pytest.raises(AllDataSourcesDown):
-                flow.resolve_company("AAPL")
+                _run(flow.resolve_company("AAPL"))
 
 
 # ---------------------------------------------------------------------------
@@ -215,10 +225,44 @@ class TestResolveCompany:
 
 
 class TestParallelDataCollection:
-    def test_populates_all_three(self, sample_market, sample_news, sample_financial):
+    def _news_items(self):
+        """Build a list[NewsItem] matching the production registry contract."""
+        from datetime import date
+        from alphaquant.models.news import NewsItem
+        return [
+            NewsItem(
+                date=date(2026, 6, 19),
+                title="AAPL beats Q2 estimates",
+                url="https://example.com/news/1",
+                source="yahoo",
+                sentiment="positive",
+                relevance_score=0.9,
+            ),
+            NewsItem(
+                date=date(2026, 6, 18),
+                title="AAPL supplier warning",
+                url="https://example.com/news/2",
+                source="yahoo",
+                sentiment="negative",
+                relevance_score=0.7,
+            ),
+            NewsItem(
+                date=date(2026, 6, 17),
+                title="AAPL neutral update",
+                url="https://example.com/news/3",
+                source="yahoo",
+                sentiment="neutral",
+                relevance_score=0.5,
+            ),
+        ]
+
+    def test_populates_all_three(self, sample_market, sample_financial):
+        """Registry contract: get_news returns list[NewsItem]; Flow transforms to NewsAnalysis."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
         flow.state.company = MagicMock()  # not used here
+
+        news_items = self._news_items()
 
         registry_patch = patch.object(
             __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
@@ -228,7 +272,7 @@ class TestParallelDataCollection:
         news_patch = patch.object(
             __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
             "get_news",
-            new=AsyncMock(return_value=sample_news),
+            new=AsyncMock(return_value=news_items),
         )
         fin_patch = patch.object(
             __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
@@ -236,51 +280,70 @@ class TestParallelDataCollection:
             new=AsyncMock(return_value=sample_financial),
         )
         with registry_patch, news_patch, fin_patch:
-            flow.parallel_data_collection()
+            _run(flow.parallel_data_collection())
 
         assert flow.state.market == sample_market
-        assert flow.state.news == sample_news
+        assert isinstance(flow.state.news, NewsAnalysis)
+        assert flow.state.news.total_count == 3
+        assert flow.state.news.positive_pct == pytest.approx(1 / 3)
+        assert flow.state.news.negative_pct == pytest.approx(1 / 3)
+        assert flow.state.news.neutral_pct == pytest.approx(1 / 3)
+        assert len(flow.state.news.key_events) == 3
         assert flow.state.financial == sample_financial
         assert flow.state.errors == []
 
+    def test_empty_news_list_falls_back_to_empty(self, sample_market, sample_financial):
+        """§3.2: empty list from registry → NewsAnalysis.empty()."""
+        flow = AnalysisFlow()
+        flow.state.ticker = "AAPL"
+        reg = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        with patch.object(reg, "get_market", new=AsyncMock(return_value=sample_market)), \
+             patch.object(reg, "get_news", new=AsyncMock(return_value=[])), \
+             patch.object(reg, "get_financial", new=AsyncMock(return_value=sample_financial)):
+            _run(flow.parallel_data_collection())
+
+        assert isinstance(flow.state.news, NewsAnalysis)
+        assert flow.state.news.total_count == 0
+        assert "news_data_unavailable" in flow.state.errors
+
     def test_market_failure_sets_none_and_records_error(
-        self, sample_news, sample_financial
+        self, sample_financial
     ):
         """§3.2: market failure → degraded (None), continue."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
         reg = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         with patch.object(reg, "get_market", new=AsyncMock(side_effect=Exception("fail"))), \
-             patch.object(reg, "get_news", new=AsyncMock(return_value=sample_news)), \
+             patch.object(reg, "get_news", new=AsyncMock(return_value=self._news_items())), \
              patch.object(reg, "get_financial", new=AsyncMock(return_value=sample_financial)):
-            flow.parallel_data_collection()
+            _run(flow.parallel_data_collection())
 
         assert flow.state.market is None
         assert "market_data_unavailable" in flow.state.errors
 
     def test_news_failure_falls_back_to_empty(self, sample_market, sample_financial):
-        """§3.2: news failure → NewsAnalysis.empty(), continue."""
+        """§3.2: news exception → NewsAnalysis.empty(), continue."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
         reg = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         with patch.object(reg, "get_market", new=AsyncMock(return_value=sample_market)), \
              patch.object(reg, "get_news", new=AsyncMock(side_effect=Exception("fail"))), \
              patch.object(reg, "get_financial", new=AsyncMock(return_value=sample_financial)):
-            flow.parallel_data_collection()
+            _run(flow.parallel_data_collection())
 
         assert isinstance(flow.state.news, NewsAnalysis)
         assert flow.state.news.total_count == 0
         assert "news_data_unavailable" in flow.state.errors
 
-    def test_financial_failure_yields_empty_statements(self, sample_market, sample_news):
+    def test_financial_failure_yields_empty_statements(self, sample_market):
         """§3.2: financial failure → empty FinancialStatements, continue."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
         reg = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         with patch.object(reg, "get_market", new=AsyncMock(return_value=sample_market)), \
-             patch.object(reg, "get_news", new=AsyncMock(return_value=sample_news)), \
+             patch.object(reg, "get_news", new=AsyncMock(return_value=self._news_items())), \
              patch.object(reg, "get_financial", new=AsyncMock(side_effect=Exception("fail"))):
-            flow.parallel_data_collection()
+            _run(flow.parallel_data_collection())
 
         assert isinstance(flow.state.financial, FinancialStatements)
         assert flow.state.financial.ticker == "AAPL"
@@ -299,21 +362,20 @@ class TestCompetitorAnalysis:
         flow.state.ticker = "AAPL"
         flow.state.company = None
 
-        flow.competitor_analysis()
+        _run(flow.competitor_analysis())
 
         assert flow.state.competitor is not None
         assert flow.state.competitor.method == "fallback"
-        # Placeholder self-peer satisfies the model constraint
-        assert len(flow.state.competitor.competitors) == 1
-        assert flow.state.competitor.competitors[0].ticker == "AAPL"
+        # §3.2: 3 GICS peers (or 3 SPY market-only peers) — see GICS_PEERS map.
+        assert len(flow.state.competitor.competitors) == 3
 
-    def test_tool_failure_falls_back(self, sample_company, sample_market):
+    def test_tool_failure_falls_back_to_gics(self, sample_company, sample_market):
+        """§3.2: competitor tool failure → 3 GICS peers based on sector."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
-        flow.state.company = sample_company
+        flow.state.company = sample_company  # sector=Technology
         flow.state.market = sample_market
 
-        # Force the tool to raise
         def raising(self, ticker: str) -> str:
             raise RuntimeError("down")
 
@@ -321,28 +383,38 @@ class TestCompetitorAnalysis:
             "alphaquant.tools.competitor_tool.CompetitorTool._run",
             new=raising,
         ):
-            flow.competitor_analysis()
+            _run(flow.competitor_analysis())
 
         assert flow.state.competitor is not None
         assert flow.state.competitor.method == "fallback"
-        # Placeholder self-peer
-        assert len(flow.state.competitor.competitors) == 1
-        assert flow.state.competitor.competitors[0].ticker == "AAPL"
+        # AAPL is in Technology peer list — should be filtered, fall back to SPY*3
+        assert len(flow.state.competitor.competitors) == 3
+        assert all(c.ticker == "SPY" for c in flow.state.competitor.competitors)
 
-    def test_tool_no_peers_falls_back(self, sample_company, sample_market):
+    def test_tool_no_peers_falls_back_to_gics(self, sample_company, sample_market):
+        """§3.2: tool returns no peers → 3 GICS peers."""
         flow = AnalysisFlow()
-        flow.state.ticker = "AAPL"
-        flow.state.company = sample_company
+        # Use a Financial-sector ticker NOT itself in the peer list to verify
+        # the GICS fallback works. We use COF (Bank of America Corp) - not in
+        # the Financial list (JPM, BAC, WFC).
+        flow.state.ticker = "COF"
+        flow.state.company = Company(
+            ticker="COF",
+            name="Capital One",
+            exchange="NYSE",
+            sector="Financial",
+            industry="Banks",
+            market_cap=50_000_000_000,
+        )
         flow.state.market = sample_market
 
         with _patch_competitor_tool("No peer data available"):
-            flow.competitor_analysis()
+            _run(flow.competitor_analysis())
 
         assert flow.state.competitor is not None
         assert flow.state.competitor.method == "fallback"
-        # Placeholder self-peer
-        assert len(flow.state.competitor.competitors) == 1
-        assert flow.state.competitor.competitors[0].ticker == "AAPL"
+        assert len(flow.state.competitor.competitors) == 3
+        assert {c.ticker for c in flow.state.competitor.competitors} == {"JPM", "BAC", "WFC"}
 
     def test_successful_competitor_scoring(self, sample_company, sample_market):
         flow = AnalysisFlow()
@@ -364,7 +436,7 @@ class TestCompetitorAnalysis:
             }
         ])
         with _patch_competitor_tool(peer_json):
-            flow.competitor_analysis()
+            _run(flow.competitor_analysis())
 
         assert flow.state.competitor is not None
         assert len(flow.state.competitor.competitors) == 1
@@ -384,7 +456,7 @@ class TestRiskAnalysis:
         flow.state.ticker = "AAPL"
         flow.state.financial = sample_financial
 
-        flow.risk_analysis()
+        _run(flow.risk_analysis())
 
         assert flow.state.risk is not None
         assert 0 <= flow.state.risk.total_score <= 100
@@ -399,7 +471,7 @@ class TestRiskAnalysis:
         flow.state.financial = FinancialStatements(ticker="AAPL")  # empty
         flow.state.market = None
 
-        flow.risk_analysis()
+        _run(flow.risk_analysis())
 
         assert flow.state.risk is not None
         # All sub-scores should be 5 (neutral) → total = 50
@@ -418,7 +490,7 @@ class TestValuationAnalysis:
         flow.state.ticker = "AAPL"
         flow.state.market = sample_market
 
-        flow.valuation_analysis()
+        _run(flow.valuation_analysis())
 
         assert flow.state.valuation is not None
         assert flow.state.valuation.dcf_value is None  # §3.2: dcf null
@@ -431,7 +503,7 @@ class TestValuationAnalysis:
         flow.state.ticker = "AAPL"
         flow.state.market = None
 
-        flow.valuation_analysis()
+        _run(flow.valuation_analysis())
 
         assert flow.state.valuation is not None
         assert flow.state.valuation.current_price == Decimal("0")
@@ -501,7 +573,7 @@ class TestWriteReport:
             sample_competitor_analysis,
         )
 
-        flow.write_report()
+        _run(flow.write_report())
 
         assert flow.state.report is not None
         assert flow.state.report.ticker == "AAPL"
@@ -534,7 +606,7 @@ class TestWriteReport:
             sample_competitor_analysis,
         )
 
-        flow.write_report()
+        _run(flow.write_report())
 
         md = flow.state.report.markdown
         for section in (
@@ -542,6 +614,35 @@ class TestWriteReport:
             "财务分析", "新闻情绪", "竞争对手", "风险评估", "估值与建议",
         ):
             assert section in md
+
+    def test_synthesis_failure_raises_report_generation_error(
+        self,
+        sample_company,
+        sample_market,
+        sample_news,
+        sample_financial,
+        sample_competitor_analysis,
+    ):
+        """§3.2: report synthesis failure → ReportGenerationError (→ 500)."""
+        from alphaquant.exceptions import ReportGenerationError
+
+        flow = AnalysisFlow()
+        self._populate_state(
+            flow,
+            sample_company,
+            sample_market,
+            sample_news,
+            sample_financial,
+            sample_competitor_analysis,
+        )
+
+        # Force InvestmentReport(...) construction to raise
+        with patch(
+            "alphaquant.flows.analysis_flow.InvestmentReport",
+            side_effect=RuntimeError("boom"),
+        ):
+            with pytest.raises(ReportGenerationError):
+                _run(flow.write_report())
 
 
 # ---------------------------------------------------------------------------
@@ -559,25 +660,37 @@ class TestFlowKickoff:
     ):
         """All 6 steps execute and produce an InvestmentReport."""
         from alphaquant.flows.analysis_flow import AnalysisFlow
+        from datetime import date
+        from alphaquant.models.news import NewsItem
 
         # Build the Flow instance directly (avoid crewai kickoff side-effects)
         flow = AnalysisFlow()
 
         reg_cls = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        news_items = [
+            NewsItem(
+                date=date(2026, 6, 19),
+                title="Test",
+                url="https://example.com/n1",
+                source="yahoo",
+                sentiment="positive",
+                relevance_score=0.9,
+            ),
+        ]
 
         with patch.object(reg_cls, "get_company", new=AsyncMock(return_value=sample_company)), \
              patch.object(reg_cls, "get_market", new=AsyncMock(return_value=sample_market)), \
-             patch.object(reg_cls, "get_news", new=AsyncMock(return_value=sample_news)), \
+             patch.object(reg_cls, "get_news", new=AsyncMock(return_value=news_items)), \
              patch.object(reg_cls, "get_financial", new=AsyncMock(return_value=sample_financial)), \
              _patch_competitor_tool("No peer data available"):
 
             # Drive the steps manually (mirrors what @start/@listen wiring would do)
-            flow.resolve_company("AAPL")
-            flow.parallel_data_collection()
-            flow.competitor_analysis()
-            flow.risk_analysis()
-            flow.valuation_analysis()
-            flow.write_report()
+            _run(flow.resolve_company("AAPL"))
+            _run(flow.parallel_data_collection())
+            _run(flow.competitor_analysis())
+            _run(flow.risk_analysis())
+            _run(flow.valuation_analysis())
+            _run(flow.write_report())
 
         assert flow.state.report is not None
         assert flow.state.report.ticker == "AAPL"
@@ -585,25 +698,38 @@ class TestFlowKickoff:
     def test_partial_failure_degrades_gracefully(
         self,
         sample_company,
-        sample_news,
+        sample_market,
         sample_financial,
     ):
         """§3.2: market failure → flow still produces a report."""
+        from datetime import date
+        from alphaquant.models.news import NewsItem
+
         flow = AnalysisFlow()
         reg_cls = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        news_items = [
+            NewsItem(
+                date=date(2026, 6, 19),
+                title="Test",
+                url="https://example.com/n1",
+                source="yahoo",
+                sentiment="positive",
+                relevance_score=0.9,
+            ),
+        ]
 
         with patch.object(reg_cls, "get_company", new=AsyncMock(return_value=sample_company)), \
              patch.object(reg_cls, "get_market", new=AsyncMock(side_effect=Exception("down"))), \
-             patch.object(reg_cls, "get_news", new=AsyncMock(return_value=sample_news)), \
+             patch.object(reg_cls, "get_news", new=AsyncMock(return_value=news_items)), \
              patch.object(reg_cls, "get_financial", new=AsyncMock(return_value=sample_financial)), \
              _patch_competitor_tool("No peer data available"):
 
-            flow.resolve_company("AAPL")
-            flow.parallel_data_collection()
-            flow.competitor_analysis()
-            flow.risk_analysis()
-            flow.valuation_analysis()
-            flow.write_report()
+            _run(flow.resolve_company("AAPL"))
+            _run(flow.parallel_data_collection())
+            _run(flow.competitor_analysis())
+            _run(flow.risk_analysis())
+            _run(flow.valuation_analysis())
+            _run(flow.write_report())
 
         # Market was degraded but flow still produced a report
         assert "market_data_unavailable" in flow.state.errors
@@ -612,3 +738,62 @@ class TestFlowKickoff:
         assert flow.state.market.source == "degraded"
         assert flow.state.report is not None
         assert flow.state.report.ticker == "AAPL"
+
+    def test_kickoff_with_timeout_succeeds_under_limit(
+        self,
+        sample_company,
+        sample_market,
+        sample_financial,
+    ):
+        """§3.4: kickoff_with_timeout returns within 120s for a fast flow."""
+        from alphaquant.flows.analysis_flow import AnalysisFlow
+        from datetime import date
+        from alphaquant.models.news import NewsItem
+
+        flow = AnalysisFlow()
+        reg_cls = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        news_items = [
+            NewsItem(
+                date=date(2026, 6, 19),
+                title="T",
+                url="https://example.com/n1",
+                source="yahoo",
+                sentiment="positive",
+                relevance_score=0.9,
+            ),
+        ]
+
+        with patch.object(reg_cls, "get_company", new=AsyncMock(return_value=sample_company)), \
+             patch.object(reg_cls, "get_market", new=AsyncMock(return_value=sample_market)), \
+             patch.object(reg_cls, "get_news", new=AsyncMock(return_value=news_items)), \
+             patch.object(reg_cls, "get_financial", new=AsyncMock(return_value=sample_financial)), \
+             _patch_competitor_tool("No peer data available"):
+
+            # kickoff_async builds inputs dict internally; we pass ticker via inputs.
+            _run(flow.kickoff_with_timeout(inputs={"ticker": "AAPL"}))
+
+        # After kickoff, the state should have a report (the return value of
+        # kickoff_async is the output of the last method, which is None here).
+        assert flow.state.report is not None
+        assert flow.state.report.ticker == "AAPL"
+
+    def test_kickoff_with_timeout_enforces_limit(self):
+        """§3.4: a slow kickoff_async → asyncio.TimeoutError after 120s.
+
+        We patch FLOW_TIMEOUT_SECONDS to a tiny value so the test runs quickly.
+        """
+        import time
+
+        flow = AnalysisFlow()
+
+        async def slow_kickoff(self, inputs=None):
+            await asyncio.sleep(2.0)
+            return None
+
+        with patch(
+            "alphaquant.flows.analysis_flow.FLOW_TIMEOUT_SECONDS", 0.1
+        ), patch.object(
+            AnalysisFlow, "kickoff_async", new=slow_kickoff
+        ):
+            with pytest.raises(asyncio.TimeoutError):
+                _run(flow.kickoff_with_timeout(inputs={"ticker": "AAPL"}))

@@ -14,7 +14,7 @@ class TickerNotFound(AlphaQuantError):
 
 
 class InvalidTickerFormat(AlphaQuantError):
-    """Raised when ticker format is invalid (not matching [A-Z]{1,5}(\.[A-Z])?)."""
+    r"""Raised when ticker format is invalid (not matching [A-Z]{1,5}(\.[A-Z])?)."""
 
     def __init__(self, ticker: str):
         self.ticker = ticker
@@ -33,3 +33,10 @@ class PartialDataFailure(AlphaQuantError):
     def __init__(self, message: str, missing_fields: list[str] | None = None):
         self.missing_fields = missing_fields or []
         super().__init__(message)
+
+
+class ReportGenerationError(AlphaQuantError):
+    """Raised when the final report synthesis step fails.
+
+    Per spec §3.2, this maps to HTTP 500 INTERNAL_ERROR.
+    """
