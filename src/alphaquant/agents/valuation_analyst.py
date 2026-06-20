@@ -1,0 +1,29 @@
+"""ValuationAnalyst Agent."""
+from __future__ import annotations
+
+from crewai import Agent
+
+from alphaquant.llm import get_llm
+from alphaquant.tools.dcf_tool import DCFTool
+
+
+def build_valuation_analyst_agent() -> Agent:
+    return Agent(
+        role="Sell-side Valuation Modeler",
+        goal=(
+            "Estimate intrinsic value using DCF, relative valuation (P/E, P/B, P/S), "
+            "and PEG. Provide a value range (low-high) with explicit assumptions."
+        ),
+        backstory=(
+            "You are a sell-side equity research modeler. You build DCF models with "
+            "explicit assumptions (growth, WACC, terminal). You cross-check with peer "
+            "multiples. You never give a single point estimate—always a range ±15%."
+        ),
+        tools=[DCFTool()],
+        llm=get_llm(temperature=0.1),
+        allow_delegation=False,
+        verbose=True,
+    )
+
+
+__all__ = ["build_valuation_analyst_agent"]
