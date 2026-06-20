@@ -5,34 +5,45 @@ AI-powered investment research analyst. Takes a US stock ticker, returns a struc
 ## Requirements
 
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/) (recommended) — fast Python package manager
 - `MINIMAX_API_KEY` (required)
 - Optional: `ALPHA_VANTAGE_API_KEY`, `FINNHUB_API_KEY`, `NEWS_API_KEY`
 
 ## Install
 
 ```bash
-pip install -e ".[dev]"
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone, sync deps, create .venv
+git clone git@github.com:songli0103/investment-agent.git
+cd investment-agent
+uv sync --extra dev
+
+# Configure environment
 cp .env.example .env
 # Edit .env to set MINIMAX_API_KEY
 ```
 
+`uv sync` automatically creates a `.venv` and installs everything pinned in `uv.lock`.
+
 ## Run
+
+All commands use `uv run` (which activates `.venv` on the fly).
 
 ### CLI
 
 ```bash
-python -m alphaquant AAPL
-python -m alphaquant AAPL --format markdown
-python -m alphaquant AAPL --pretty --output report.json
+uv run python -m alphaquant AAPL
+uv run python -m alphaquant AAPL --format markdown
+uv run python -m alphaquant AAPL --pretty --output report.json
 ```
 
 ### FastAPI
 
 ```bash
-uvicorn alphaquant.main:app --reload
+uv run uvicorn alphaquant.main:app --reload
 ```
-
-> The in-process rate limiter is per-worker — run with `--workers 1` for now, or replace with a shared limiter before scaling out.
 
 Then:
 ```bash
@@ -43,10 +54,13 @@ curl -X POST http://localhost:8000/api/v1/analyze \
 
 Docs at http://localhost:8000/docs
 
+> The in-process rate limiter is per-worker — run with `--workers 1` for now, or replace with a shared limiter before scaling out.
+
 ## Test
 
 ```bash
-python -m tests.smoke
+uv run pytest -q              # Full suite (179 tests)
+uv run python -m tests.smoke  # End-to-end smoke test (7 assertions)
 ```
 
 ## Architecture
