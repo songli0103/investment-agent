@@ -11,6 +11,7 @@ The tests focus on wiring and behavior at the entry-point layer:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -33,6 +34,7 @@ from alphaquant.api.schemas import (
 from alphaquant.exceptions import (
     AllDataSourcesDown,
     InvalidTickerFormat,
+    ReportGenerationError,
     TickerNotFound,
 )
 from alphaquant.main import app, run_analysis, run_analysis_async
@@ -254,6 +256,38 @@ def test_analyze_endpoint_returns_500_when_no_report():
 
     assert resp.status_code == 503
     assert resp.json()["detail"]["code"] == "ALL_DATA_SOURCES_DOWN"
+
+
+def test_analyze_endpoint_maps_report_generation_error_to_500():
+    """ReportGenerationError (raised by the Flow's write_report step on synthesis
+    failure) maps to HTTP 500 per spec §5.2."""
+    from alphaquant.api import rate_limiter
+
+    rate_limiter.reset_rate_limiter()
+    with patch(
+        "alphaquant.api.routes.run_analysis_async",
+        side_effect=ReportGenerationError("synthesis blew up"),
+    ):
+        resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["code"] == "REPORT_GENERATION_ERROR"
+
+
+def test_analyze_endpoint_maps_asyncio_timeout_to_504():
+    """asyncio.TimeoutError (propagated when the 120s Flow budget is exceeded)
+    maps to HTTP 504 per spec §5.2."""
+    from alphaquant.api import rate_limiter
+
+    rate_limiter.reset_rate_limiter()
+    with patch(
+        "alphaquant.api.routes.run_analysis_async",
+        side_effect=asyncio.TimeoutError(),
+    ):
+        resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
+
+    assert resp.status_code == 504
+    assert resp.json()["detail"]["code"] == "GATEWAY_TIMEOUT"
 
 
 def test_rate_limiter_returns_429_after_burst():

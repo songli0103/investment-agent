@@ -1,6 +1,8 @@
 """FastAPI routes."""
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from alphaquant.api.rate_limiter import rate_limit_analyze
@@ -8,6 +10,7 @@ from alphaquant.api.schemas import AnalyzeRequest, AnalyzeResponse, HealthRespon
 from alphaquant.exceptions import (
     AllDataSourcesDown,
     InvalidTickerFormat,
+    ReportGenerationError,
     TickerNotFound,
 )
 from alphaquant.core import run_analysis_async
@@ -33,6 +36,10 @@ async def analyze(req: AnalyzeRequest):
         raise HTTPException(404, detail={"code": "TICKER_NOT_FOUND", "message": str(e)})
     except AllDataSourcesDown as e:
         raise HTTPException(503, detail={"code": "ALL_DATA_SOURCES_DOWN", "message": str(e)})
+    except ReportGenerationError as e:
+        raise HTTPException(500, detail={"code": "REPORT_GENERATION_ERROR", "message": str(e)})
+    except asyncio.TimeoutError:
+        raise HTTPException(504, detail={"code": "GATEWAY_TIMEOUT", "message": "Flow exceeded 120s budget"})
     return AnalyzeResponse(report_id=report.report_id, report=report)
 
 
