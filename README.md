@@ -71,3 +71,25 @@ uv run python -m tests.smoke  # End-to-end smoke test (7 assertions)
 Data sources (fallback chain): Yahoo Finance → Alpha Vantage → Finnhub → SEC EDGAR → NewsAPI.
 
 LLM: MiniMax-M3 via LiteLLM.
+
+## Frontend (Streamlit)
+
+Multi-page UI for browsing reports, tracking history, and comparing tickers.
+
+### Local run
+
+```bash
+uv run streamlit run src/alphaquant/frontend/app.py
+# Open http://localhost:8501
+```
+
+### Docker
+
+```bash
+docker compose up -d --build
+# Open http://localhost:8501
+# Data persisted in ./data/reports.db
+```
+
+Pages: Analyze / History / Compare / Settings.
+All analyses are auto-persisted to SQLite; restart-safe.
