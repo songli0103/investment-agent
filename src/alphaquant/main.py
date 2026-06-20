@@ -8,6 +8,12 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from alphaquant.api.routes import router
+from alphaquant.observability import configure_logging, get_logger
+
+# Configure structured logging once at import time. Idempotent under
+# repeated calls because structlog rewires its global processors cleanly.
+configure_logging()
+log = get_logger("alphaquant.main")
 
 VERSION = "1.0.0"
 

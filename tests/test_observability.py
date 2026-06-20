@@ -7,6 +7,30 @@ import logging
 from unittest.mock import patch
 
 import pytest
+import structlog
+
+
+@pytest.fixture
+def reset_structlog():
+    """Reset structlog state and re-bind the cached module loggers.
+
+    ``configure_logging()`` sets ``cache_logger_on_first_use=True`` and a
+    specific ``PrintLoggerFactory(file=sys.stderr)``. Once a module-level
+    logger (e.g. ``cost_tracker.log``) has been bound via
+    ``structlog.get_logger(...)``, structlog caches the resulting
+    ``BoundLogger`` and ignores subsequent ``configure()`` calls — even
+    ones in the test. To get deterministic, stream-capturable logs we
+    must rebind the cached logger ourselves after resetting defaults and
+    disabling the cache.
+    """
+    structlog.reset_defaults()
+    structlog.configure(cache_logger_on_first_use=False)
+    # Re-bind the module-level loggers in observability so they pick up
+    # the new (test-time) configuration.
+    import alphaquant.observability.cost_tracker as ct
+    ct.log = structlog.get_logger()
+    yield
+    structlog.reset_defaults()
 
 
 # ---------------------------------------------------------------------------
@@ -90,12 +114,10 @@ class TestTrackUsage:
         assert usage.input_tokens == 1000
         assert usage.output_tokens == 500
 
-    def test_logs_event(self, capsys):
+    def test_logs_event(self, capsys, reset_structlog):
         from alphaquant.observability import track_usage
 
         # Configure with stdout so we can capture
-        import structlog
-
         structlog.configure(
             processors=[structlog.processors.JSONRenderer()],
             logger_factory=structlog.PrintLoggerFactory(),
@@ -116,9 +138,8 @@ class TestTrackUsage:
         assert record["request_id"] == "req-1"
         assert "cost_usd" in record
 
-    def test_optional_request_id_none(self, capsys):
+    def test_optional_request_id_none(self, capsys, reset_structlog):
         from alphaquant.observability import track_usage
-        import structlog
 
         structlog.configure(
             processors=[structlog.processors.JSONRenderer()],

@@ -23,8 +23,11 @@ from alphaquant.models.news import NewsAnalysis, NewsItem
 from alphaquant.models.report import InvestmentReport
 from alphaquant.models.risk import RiskAssessment, RiskScore
 from alphaquant.models.valuation import ValuationResult
+from alphaquant.observability import get_logger
 from alphaquant.scoring import competitive, financial_health, risk_score
 from alphaquant.scoring.rating import determine_rating
+
+log = get_logger("alphaquant.flows.analysis_flow")
 
 # §3.4: whole-Flow timeout (per spec).
 FLOW_TIMEOUT_SECONDS = 120.0
@@ -152,16 +155,30 @@ class AnalysisFlow(Flow[AnalysisState]):
         )
         normalized = _normalize_ticker(raw_ticker)
         self.state.ticker = normalized
+        log.info("flow_step_started", step="resolve_company", ticker=normalized)
         registry = DataSourceRegistry()
         try:
             company = await registry.get_company(normalized)
             self.state.company = company
+            log.info(
+                "flow_step_completed",
+                step="resolve_company",
+                ticker=normalized,
+                company_name=getattr(company, "name", None),
+            )
         except AllDataSourcesDown as e:
+            log.error(
+                "flow_step_failed",
+                step="resolve_company",
+                ticker=normalized,
+                error=str(e),
+            )
             raise AllDataSourcesDown(f"Cannot resolve {normalized}: {e}")
 
     @listen(resolve_company)
     async def parallel_data_collection(self) -> None:
         """Step 2: Market + News + Financial in parallel."""
+        log.info("flow_step_started", step="parallel_data_collection", ticker=self.state.ticker)
         registry = DataSourceRegistry()
         ticker = self.state.ticker
 
@@ -199,9 +216,20 @@ class AnalysisFlow(Flow[AnalysisState]):
         if not isinstance(financial_raw, FinancialStatements):
             self.state.errors.append("financial_data_unavailable")
 
+        log.info(
+            "flow_step_completed",
+            step="parallel_data_collection",
+            ticker=ticker,
+            market_ok=isinstance(market_raw, MarketData),
+            news_ok=isinstance(news_raw, (list, NewsAnalysis)),
+            financial_ok=isinstance(financial_raw, FinancialStatements),
+            errors=list(self.state.errors),
+        )
+
     @listen(parallel_data_collection)
     async def competitor_analysis(self) -> None:
         """Step 3: Identify and compare competitors."""
+        log.info("flow_step_started", step="competitor_analysis", ticker=self.state.ticker)
         if not self.state.company:
             peers = _gics_peers_for(None, self.state.ticker)
             self.state.competitor = CompetitorAnalysis(
@@ -213,6 +241,13 @@ class AnalysisFlow(Flow[AnalysisState]):
                 strengths=[],
                 weaknesses=[],
                 method="fallback",
+            )
+            log.info(
+                "flow_step_completed",
+                step="competitor_analysis",
+                ticker=self.state.ticker,
+                method="fallback",
+                peer_count=len(peers),
             )
             return
 
@@ -246,6 +281,13 @@ class AnalysisFlow(Flow[AnalysisState]):
                 competitive_score=50,
                 method="fallback",
             )
+            log.info(
+                "flow_step_completed",
+                step="competitor_analysis",
+                ticker=self.state.ticker,
+                method="fallback",
+                peer_count=len(peers),
+            )
             return
 
         target_metrics = {
@@ -264,10 +306,19 @@ class AnalysisFlow(Flow[AnalysisState]):
             strengths=[],
             weaknesses=[],
         )
+        log.info(
+            "flow_step_completed",
+            step="competitor_analysis",
+            ticker=self.state.ticker,
+            method="computed",
+            peer_count=len(peers),
+            competitive_score=score,
+        )
 
     @listen(competitor_analysis)
     async def risk_analysis(self) -> None:
         """Step 4: Compute risk score from upstream data."""
+        log.info("flow_step_started", step="risk_analysis", ticker=self.state.ticker)
         sub_scores: list[RiskScore] = []
 
         # Financial risk
@@ -320,10 +371,18 @@ class AnalysisFlow(Flow[AnalysisState]):
             sub_scores=sub_scores,
             top_risks=[s.rationale for s in sub_scores[:3]],
         )
+        log.info(
+            "flow_step_completed",
+            step="risk_analysis",
+            ticker=self.state.ticker,
+            total_score=total,
+            level=level,
+        )
 
     @listen(risk_analysis)
     async def valuation_analysis(self) -> None:
         """Step 5: DCF + relative + PEG → intrinsic value."""
+        log.info("flow_step_started", step="valuation_analysis", ticker=self.state.ticker)
         if not self.state.market:
             self.state.valuation = ValuationResult(
                 ticker=self.state.ticker,
@@ -356,6 +415,15 @@ class AnalysisFlow(Flow[AnalysisState]):
             method="relative_only",
             assumptions={"peer_pe_avg": peer_pe_avg},
         )
+        log.info(
+            "flow_step_completed",
+            step="valuation_analysis",
+            ticker=self.state.ticker,
+            method="relative_only",
+            current_price=float(current),
+            intrinsic_value=float(relative_value),
+            upside_pct=round(upside, 4),
+        )
 
     @listen(valuation_analysis)
     async def write_report(self) -> None:
@@ -364,6 +432,7 @@ class AnalysisFlow(Flow[AnalysisState]):
         On any synthesis failure, raise ``ReportGenerationError`` so the caller
         (FastAPI handler per spec §5.2) can return HTTP 500 INTERNAL_ERROR.
         """
+        log.info("flow_step_started", step="write_report", ticker=self.state.ticker)
         assert self.state.company is not None
         assert self.state.news is not None
         assert self.state.financial is not None
@@ -427,7 +496,22 @@ class AnalysisFlow(Flow[AnalysisState]):
                 markdown=markdown,
                 sources=[market.source, self.state.news.source],
             )
+            log.info(
+                "flow_step_completed",
+                step="write_report",
+                ticker=self.state.ticker,
+                report_id=self.state.report.report_id,
+                rating=rating,
+                confidence=confidence,
+                health_score=health_score,
+            )
         except Exception as exc:  # pragma: no cover - defensive
+            log.error(
+                "flow_step_failed",
+                step="write_report",
+                ticker=self.state.ticker,
+                error=str(exc),
+            )
             raise ReportGenerationError(
                 f"Failed to synthesize report for {self.state.ticker}: {exc}"
             ) from exc
@@ -440,10 +524,18 @@ class AnalysisFlow(Flow[AnalysisState]):
         coroutine is cancelled and ``asyncio.TimeoutError`` propagates to the
         caller, which (per spec §5.2) maps to HTTP 504 GATEWAY_TIMEOUT.
         """
-        return await asyncio.wait_for(
-            self.kickoff_async(inputs=inputs),
-            timeout=FLOW_TIMEOUT_SECONDS,
-        )
+        try:
+            return await asyncio.wait_for(
+                self.kickoff_async(inputs=inputs),
+                timeout=FLOW_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            log.error(
+                "flow_timeout",
+                ticker=(inputs or {}).get("ticker", self.state.ticker),
+                timeout_seconds=FLOW_TIMEOUT_SECONDS,
+            )
+            raise
 
 
 def _build_markdown(

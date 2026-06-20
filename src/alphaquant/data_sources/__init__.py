@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import structlog
 
 from alphaquant.data_sources.alpha_vantage import AlphaVantageSource
 from alphaquant.data_sources.base import DataSourceInterface
@@ -15,8 +14,9 @@ from alphaquant.models.company import Company
 from alphaquant.models.financial import FinancialStatements
 from alphaquant.models.market import MarketData
 from alphaquant.models.news import NewsItem
+from alphaquant.observability import get_logger
 
-log = structlog.get_logger()
+log = get_logger("alphaquant.data_sources")
 
 
 class DataSourceRegistry:
