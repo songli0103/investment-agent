@@ -32,6 +32,8 @@ python -m alphaquant AAPL --pretty --output report.json
 uvicorn alphaquant.main:app --reload
 ```
 
+> The in-process rate limiter is per-worker — run with `--workers 1` for now, or replace with a shared limiter before scaling out.
+
 Then:
 ```bash
 curl -X POST http://localhost:8000/api/v1/analyze \
