@@ -837,6 +837,280 @@ class TestParseCrewOutput:
         assert state.financial.income_statements == []
         assert "financial_data_unavailable" in state.errors
 
+    def test_parse_crew_output_extracts_competitor_from_pydantic(self):
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+        from alphaquant.models.competitor import CompetitorAnalysis
+        from alphaquant.models.company import Company
+        from alphaquant.models.market import MarketData
+        from alphaquant.models.financial import FinancialStatements
+        from alphaquant.models.news import NewsAnalysis
+        from alphaquant.models.risk import RiskAssessment
+        from alphaquant.models.valuation import ValuationResult
+        from alphaquant.models.report import InvestmentReport
+
+        ca = CompetitorAnalysis(
+            target_ticker="AAPL",
+            competitors=[
+                Competitor(
+                    ticker="MSFT",
+                    name="Microsoft",
+                    market_cap=2_500_000_000_000,
+                    revenue_ttm=Decimal("200000000000"),
+                )
+            ],
+            industry_rank=1,
+            industry_size=5,
+            competitive_score=50,
+            strengths=["x"],
+            weaknesses=["y"],
+            method="gics",
+        )
+        company = Company(
+            ticker="AAPL",
+            name="Apple Inc.",
+            exchange="NASDAQ",
+            sector="Technology",
+            industry="Consumer Electronics",
+            market_cap=3_000_000_000_000,
+        )
+        market = MarketData(
+            ticker="AAPL",
+            as_of=datetime.utcnow(),
+            price=Decimal("180"),
+            change_pct=0.0,
+            volume=0,
+            market_cap=3_000_000_000_000,
+            pe_ratio=28.0,
+            revenue_growth_yoy=5.0,
+            beta=1.2,
+            source="yahoo",
+        )
+        fin = FinancialStatements(ticker="AAPL")
+        news = NewsAnalysis.empty("AAPL")
+        risk = RiskAssessment(
+            ticker="AAPL",
+            total_score=50,
+            level="medium",
+            sub_scores=[
+                RiskScore(
+                    category="financial",
+                    score=5,
+                    rationale="placeholder subscore rationale text",
+                    evidence=[],
+                )
+            ],
+            top_risks=[],
+            method="weighted_sum_v1",
+        )
+        val = ValuationResult(
+            ticker="AAPL",
+            intrinsic_value_per_share=Decimal("150"),
+            current_price=Decimal("180"),
+            upside_pct=-16.67,
+            dcf_value=Decimal("120"),
+            relative_value=Decimal("180"),
+            peg_ratio=None,
+            method="dcf_relative_peg",
+            assumptions={},
+        )
+        rep = InvestmentReport(
+            report_id="00000000-0000-0000-0000-000000000000",
+            ticker="AAPL",
+            generated_at=datetime.utcnow(),
+            data_as_of={},
+            company=company,
+            market=market,
+            financial=fin,
+            financial_health_score=70,
+            news=news,
+            competitors=ca,
+            risk=risk,
+            valuation=val,
+            rating="Hold",
+            confidence=70,
+            investment_horizon="medium",
+            catalysts=["Earnings beat"],
+            markdown="## Summary\nTest report.",
+            sources=["yahoo"],
+            disclaimer="test disclaimer",
+        )
+
+        class _FakeTask:
+            def __init__(self, pyd_obj=None, raw=""):
+                self.pydantic = pyd_obj
+                self.raw = raw
+
+        tasks_output = [
+            _FakeTask(pyd_obj=company, raw=company.model_dump_json()),  # 0
+            _FakeTask(pyd_obj=market, raw=market.model_dump_json()),    # 1
+            _FakeTask(raw="[]"),                                          # 2 news list
+            _FakeTask(pyd_obj=fin, raw=fin.model_dump_json()),           # 3
+            _FakeTask(pyd_obj=ca, raw=ca.model_dump_json()),             # 4
+            _FakeTask(pyd_obj=risk, raw=risk.model_dump_json()),         # 5
+            _FakeTask(pyd_obj=val, raw=val.model_dump_json()),           # 6
+            _FakeTask(pyd_obj=rep, raw=rep.model_dump_json()),           # 7
+        ]
+
+        class _FakeResult:
+            pass
+
+        _FakeResult.tasks_output = tasks_output
+
+        state = AnalysisState(ticker="AAPL")
+        parse_crew_output(_FakeResult(), state)
+
+        assert state.competitor is ca
+        assert state.risk is risk
+        assert state.valuation is val
+        assert state.report is rep
+
+    def test_parse_crew_output_missing_pydantic_sets_none_and_appends_error(self):
+        """When a Pydantic task output is empty, state.<field> = None + error appended."""
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+        from alphaquant.models.company import Company
+        from alphaquant.models.market import MarketData
+        from alphaquant.models.financial import FinancialStatements
+
+        company = Company(
+            ticker="AAPL",
+            name="Apple Inc.",
+            exchange="NASDAQ",
+            sector="Technology",
+            industry="Consumer Electronics",
+            market_cap=3_000_000_000_000,
+        )
+        market = MarketData(
+            ticker="AAPL",
+            as_of=datetime.utcnow(),
+            price=Decimal("180"),
+            change_pct=0.0,
+            volume=0,
+            market_cap=3_000_000_000_000,
+            pe_ratio=28.0,
+            revenue_growth_yoy=5.0,
+            beta=1.2,
+            source="yahoo",
+        )
+        fin = FinancialStatements(ticker="AAPL")
+
+        class _FakeTask:
+            def __init__(self, pyd_obj=None, raw=""):
+                self.pydantic = pyd_obj
+                self.raw = raw
+
+        tasks_output = [
+            _FakeTask(pyd_obj=company, raw=company.model_dump_json()),
+            _FakeTask(pyd_obj=market, raw=market.model_dump_json()),
+            _FakeTask(raw="[]"),
+            _FakeTask(pyd_obj=fin, raw=fin.model_dump_json()),
+            _FakeTask(raw=""),  # competitor failed → empty
+            _FakeTask(raw=""),  # risk failed
+            _FakeTask(raw=""),  # valuation failed
+            _FakeTask(raw=""),  # report writer failed
+        ]
+
+        class _FakeResult:
+            pass
+
+        _FakeResult.tasks_output = tasks_output
+
+        state = AnalysisState(ticker="AAPL")
+        parse_crew_output(_FakeResult(), state)
+
+        assert state.competitor is None
+        assert state.risk is None
+        assert state.valuation is None
+        assert state.report is None
+        assert "competitor_analyst_unavailable" in state.errors
+        assert "risk_analyst_unavailable" in state.errors
+        assert "valuation_analyst_unavailable" in state.errors
+        assert "report_writer_unavailable" in state.errors
+
+
+class TestExtractPydanticField:
+    """_extract_pydantic_field: read task_out.pydantic → model or None + error."""
+
+    def test_returns_pydantic_instance_from_task_output(self):
+        from alphaquant.flows.analysis_flow import _extract_pydantic_field
+        from alphaquant.models.competitor import CompetitorAnalysis
+        from alphaquant.flows.analysis_flow import AnalysisState
+
+        ca = CompetitorAnalysis(
+            target_ticker="AAPL",
+            competitors=[
+                Competitor(
+                    ticker="MSFT",
+                    name="Microsoft",
+                    market_cap=2_500_000_000_000,
+                    revenue_ttm=Decimal("200000000000"),
+                )
+            ],
+            industry_rank=1,
+            industry_size=5,
+            competitive_score=50,
+            strengths=["x"],
+            weaknesses=["y"],
+            method="gics",
+        )
+
+        class _FakeTask:
+            pydantic = ca
+            raw = ""
+
+        state = AnalysisState(ticker="AAPL")
+        result = _extract_pydantic_field(
+            [_FakeTask(), _FakeTask()], 0, "competitor_analyst", CompetitorAnalysis, state
+        )
+        assert result is ca
+        assert state.errors == []
+
+    def test_missing_pydantic_attribute_appends_error(self):
+        from alphaquant.flows.analysis_flow import _extract_pydantic_field
+        from alphaquant.models.competitor import CompetitorAnalysis
+        from alphaquant.flows.analysis_flow import AnalysisState
+
+        class _FakeTask:
+            raw = "not a model"
+
+        state = AnalysisState(ticker="AAPL")
+        result = _extract_pydantic_field(
+            [_FakeTask()], 0, "competitor_analyst", CompetitorAnalysis, state
+        )
+        assert result is None
+        assert "competitor_analyst_unavailable" in state.errors
+
+    def test_idx_out_of_range_appends_error(self):
+        from alphaquant.flows.analysis_flow import _extract_pydantic_field
+        from alphaquant.models.competitor import CompetitorAnalysis
+        from alphaquant.flows.analysis_flow import AnalysisState
+
+        class _FakeTask:
+            pydantic = None
+            raw = ""
+
+        state = AnalysisState(ticker="AAPL")
+        result = _extract_pydantic_field(
+            [_FakeTask()], 5, "competitor_analyst", CompetitorAnalysis, state
+        )
+        assert result is None
+        assert "competitor_analyst_unavailable" in state.errors
+
+    def test_wrong_type_appends_error(self):
+        from alphaquant.flows.analysis_flow import _extract_pydantic_field
+        from alphaquant.models.competitor import CompetitorAnalysis
+        from alphaquant.flows.analysis_flow import AnalysisState
+
+        class _FakeTask:
+            pydantic = "not a model"
+            raw = ""
+
+        state = AnalysisState(ticker="AAPL")
+        result = _extract_pydantic_field(
+            [_FakeTask()], 0, "competitor_analyst", CompetitorAnalysis, state
+        )
+        assert result is None
+        assert "competitor_analyst_unavailable" in state.errors
+
 
 class TestExtractDataField:
     """parse_crew_output helper: validate JSON or detect error string."""

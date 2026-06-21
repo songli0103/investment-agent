@@ -301,10 +301,19 @@ def parse_crew_output(
         state.financial = FinancialStatements(ticker=state.ticker)
         state.errors.append(fin_err or "financial_data_unavailable")
 
-    # --- Competitor / Risk / Valuation: deterministic fallback (unchanged from sub-1) ---
-    _populate_competitor(state, _safe_parse(raw_by_key.get("competitor_analyst", "")))
-    _populate_risk(state, _safe_parse(raw_by_key.get("risk_analyst", "")))
-    _populate_valuation(state, _safe_parse(raw_by_key.get("valuation_analyst", "")))
+    # --- Sub-project 3: 3 analysis fields + 1 report from Pydantic output_pydantic ---
+    state.competitor = _extract_pydantic_field(
+        tasks_output, 4, "competitor_analyst", CompetitorAnalysis, state
+    )
+    state.risk = _extract_pydantic_field(
+        tasks_output, 5, "risk_analyst", RiskAssessment, state
+    )
+    state.valuation = _extract_pydantic_field(
+        tasks_output, 6, "valuation_analyst", ValuationResult, state
+    )
+    state.report = _extract_pydantic_field(
+        tasks_output, 7, "report_writer", InvestmentReport, state
+    )
 
     return extracted
 
@@ -319,6 +328,36 @@ def _safe_parse(raw: str) -> dict[str, Any]:
         return result if isinstance(result, dict) else {}
     except (json.JSONDecodeError, ValueError):
         return {}
+
+
+def _extract_pydantic_field(
+    tasks_output: list[Any],
+    idx: int,
+    key: str,
+    model_cls: type[BaseModel],
+    state: "AnalysisState",
+) -> BaseModel | None:
+    """Extract a Pydantic model from a CrewAI task output.
+
+    CrewAI 0.203.2 sets ``task_out.pydantic`` to the validated model instance when
+    the task is configured with ``output_pydantic=...``. Per sub-3 decision
+    (strict no-fallback), we ONLY read that attribute. If it is missing or not
+    the expected model type, append "<key>_unavailable" to state.errors and
+    return None. We do NOT attempt to recover by parsing task_out.raw.
+
+    Returns the model instance, or ``None`` on any failure.
+    """
+    if idx >= len(tasks_output):
+        state.errors.append(f"{key}_unavailable")
+        return None
+    task_out = tasks_output[idx]
+
+    pyd_obj = getattr(task_out, "pydantic", None)
+    if isinstance(pyd_obj, model_cls):
+        return pyd_obj
+
+    state.errors.append(f"{key}_unavailable")
+    return None
 
 
 def _extract_data_field(
