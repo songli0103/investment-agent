@@ -21,6 +21,7 @@ from decimal import Decimal
 from pydantic import ValidationError
 
 from alphaquant.models.competitor import Competitor, CompetitorAnalysis
+from alphaquant.models.risk import RiskAssessment, RiskScore
 from alphaquant.models.valuation import ValuationResult
 
 
@@ -31,6 +32,25 @@ def _make_competitor() -> Competitor:
         name="Microsoft",
         market_cap=2_000_000_000_000,
         revenue_ttm=Decimal("200000000000"),
+    )
+
+
+def _make_risk_score(category: str = "market", score: int = 5) -> RiskScore:
+    """RiskScore requires rationale (min_length=10) and accepts any category string."""
+    return RiskScore(
+        category=category,
+        score=score,
+        rationale="Detailed rationale that meets the min_length=10 constraint.",
+    )
+
+
+def _make_risk_assessment(level: str = "medium") -> RiskAssessment:
+    return RiskAssessment(
+        ticker="AAPL",
+        total_score=50,
+        level=level,
+        sub_scores=[_make_risk_score()],
+        top_risks=["some risk"],
     )
 
 
@@ -131,3 +151,71 @@ class TestCompetitorAnalysisMethodLiteral:
                 competitive_score=50,
                 method="nonsense_method_xyz",
             )
+
+
+class TestRiskAssessmentLevelCaseInsensitive:
+    """Sub-3 Task 3 retro-fix (B4): LLM produces 'Low'/'HIGH'; normalize to lowercase."""
+
+    @pytest.mark.parametrize("input_level", ["low", "medium", "high", "extreme"])
+    def test_lowercase_accepted(self, input_level):
+        ra = _make_risk_assessment(level=input_level)
+        assert ra.level == input_level
+
+    @pytest.mark.parametrize(
+        "input_level,expected",
+        [
+            ("Low", "low"),
+            ("LOW", "low"),
+            ("Medium", "medium"),
+            ("HIGH", "high"),
+            ("Extreme", "extreme"),
+            ("LoW", "low"),
+        ],
+    )
+    def test_capitalized_normalized_to_lowercase(self, input_level, expected):
+        ra = _make_risk_assessment(level=input_level)
+        assert ra.level == expected
+
+    def test_truly_unknown_value_rejected(self):
+        """Sanity: a non-Literal value still rejected (just lowercased first)."""
+        with pytest.raises(ValidationError):
+            _make_risk_assessment(level="catastrophic")
+
+
+class TestRiskScoreCategoryAnyString:
+    """Sub-3 Task 3 retro-fix (B5): LLM produces human-readable strings."""
+
+    @pytest.mark.parametrize(
+        "category",
+        [
+            "Market Risk",
+            "Credit Risk",
+            "Operational Risk",
+            "Liquidity Risk",
+            "Regulatory/Compliance Risk",
+            "Volatility Risk",
+            "financial",  # old canonical still works
+            "market",
+            "anything_goes_xyz",
+        ],
+    )
+    def test_any_string_accepted(self, category):
+        rs = _make_risk_score(category=category)
+        assert rs.category == category
+
+
+class TestRiskScoreScoreRange:
+    """Sub-3 Task 3 retro-fix (B6): widened 0-10 -> 0-100."""
+
+    @pytest.mark.parametrize("score", [0, 5, 10, 15, 30, 50, 100])
+    def test_widened_range_accepted(self, score):
+        rs = _make_risk_score(score=score)
+        assert rs.score == score
+
+    def test_negative_still_rejected(self):
+        with pytest.raises(ValidationError):
+            _make_risk_score(score=-1)
+
+    def test_above_100_still_rejected(self):
+        with pytest.raises(ValidationError):
+            _make_risk_score(score=101)
