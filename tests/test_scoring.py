@@ -13,7 +13,7 @@ from alphaquant.models.financial import (
     IncomeStatement,
 )
 from alphaquant.models.risk import RiskScore
-from alphaquant.scoring import competitive, financial_health, risk_score
+from alphaquant.scoring import competitive, dcf, financial_health, risk_score
 
 
 # ---------------------------------------------------------------------------
@@ -400,11 +400,109 @@ class TestCompetitive:
 
 
 # ---------------------------------------------------------------------------
+# DCF Valuation
+# ---------------------------------------------------------------------------
+
+
+class TestComputeDcfValue:
+    def test_normal_inputs_returns_decimal(self):
+        # FCF=$1B, growth=8%, shares=100M, WACC=9%, g_term=2.5%.
+        # Sanity: terminal value dominates equity (~75%), so per-share ≈ $199.
+        result = dcf.compute_dcf_value(
+            fcf=Decimal("1000000000"),
+            growth_rate=0.08,
+            shares_outstanding=100_000_000,
+        )
+        assert isinstance(result, Decimal)
+        # Hand-computed expected ≈ $199.18; allow ±5% for rounding.
+        assert Decimal("189") < result < Decimal("210")
+
+    def test_fcf_zero_returns_none(self):
+        assert dcf.compute_dcf_value(
+            fcf=Decimal("0"),
+            growth_rate=0.05,
+            shares_outstanding=1_000_000,
+        ) is None
+
+    def test_fcf_negative_returns_none(self):
+        assert dcf.compute_dcf_value(
+            fcf=Decimal("-1000000"),
+            growth_rate=0.05,
+            shares_outstanding=1_000_000,
+        ) is None
+
+    def test_shares_zero_returns_none(self):
+        assert dcf.compute_dcf_value(
+            fcf=Decimal("1000000"),
+            growth_rate=0.05,
+            shares_outstanding=0,
+        ) is None
+
+    def test_shares_negative_returns_none(self):
+        assert dcf.compute_dcf_value(
+            fcf=Decimal("1000000"),
+            growth_rate=0.05,
+            shares_outstanding=-100,
+        ) is None
+
+    def test_wacc_le_terminal_growth_returns_none(self):
+        # WACC=2.5% == terminal → invalid (Gordon formula 0/0).
+        assert dcf.compute_dcf_value(
+            fcf=Decimal("1000000"),
+            growth_rate=0.05,
+            shares_outstanding=1_000_000,
+            wacc=0.025,
+            terminal_growth=0.025,
+        ) is None
+
+    def test_wacc_below_terminal_growth_returns_none(self):
+        # WACC < g_term → negative terminal value would explode.
+        assert dcf.compute_dcf_value(
+            fcf=Decimal("1000000"),
+            growth_rate=0.05,
+            shares_outstanding=1_000_000,
+            wacc=0.02,
+            terminal_growth=0.025,
+        ) is None
+
+    def test_higher_growth_higher_intrinsic(self):
+        low = dcf.compute_dcf_value(
+            fcf=Decimal("1000000"),
+            growth_rate=0.03,
+            shares_outstanding=1_000_000,
+        )
+        high = dcf.compute_dcf_value(
+            fcf=Decimal("1000000"),
+            growth_rate=0.10,
+            shares_outstanding=1_000_000,
+        )
+        assert low is not None and high is not None
+        assert high > low
+
+    def test_higher_wacc_lower_intrinsic(self):
+        low_wacc = dcf.compute_dcf_value(
+            fcf=Decimal("1000000"),
+            growth_rate=0.05,
+            shares_outstanding=1_000_000,
+            wacc=0.07,
+        )
+        high_wacc = dcf.compute_dcf_value(
+            fcf=Decimal("1000000"),
+            growth_rate=0.05,
+            shares_outstanding=1_000_000,
+            wacc=0.12,
+        )
+        assert low_wacc is not None and high_wacc is not None
+        assert low_wacc > high_wacc
+
+
+# ---------------------------------------------------------------------------
 # Package init
 # ---------------------------------------------------------------------------
 
 def test_package_exports():
-    from alphaquant.scoring import competitive, financial_health, risk_score
+    from alphaquant.scoring import competitive, dcf, financial_health, risk_score
     assert competitive is not None
+    assert dcf is not None
     assert financial_health is not None
     assert risk_score is not None

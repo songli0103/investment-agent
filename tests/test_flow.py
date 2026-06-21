@@ -18,7 +18,7 @@ from alphaquant.exceptions import AllDataSourcesDown, InvalidTickerFormat
 from alphaquant.flows import AnalysisFlow, AnalysisState
 from alphaquant.models.competitor import Competitor, CompetitorAnalysis
 from alphaquant.models.company import Company
-from alphaquant.models.financial import BalanceSheet, FinancialStatements, IncomeStatement
+from alphaquant.models.financial import BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement
 from alphaquant.models.market import MarketData
 from alphaquant.models.news import NewsAnalysis
 from alphaquant.models.risk import RiskAssessment, RiskScore
@@ -493,8 +493,65 @@ class TestValuationAnalysis:
         _run(flow.valuation_analysis())
 
         assert flow.state.valuation is not None
-        assert flow.state.valuation.dcf_value is None  # §3.2: dcf null
+        # sample_market has no financial → cash_flows unavailable → DCF returns None.
+        assert flow.state.valuation.dcf_value is None
         assert flow.state.valuation.relative_value is not None
+        assert flow.state.valuation.method == "relative_only"
+
+    def test_dcf_computed_when_fcf_available(self, sample_market):
+        """When financial has positive FCF, DCF is computed and method becomes dcf_relative_peg."""
+        flow = AnalysisFlow()
+        flow.state.ticker = "AAPL"
+        flow.state.market = sample_market
+        flow.state.financial = FinancialStatements(
+            ticker="AAPL",
+            cash_flows=[
+                CashFlowStatement(
+                    period="TTM",
+                    fiscal_year=2026,
+                    operating_cash_flow=Decimal("120000000000"),
+                    free_cash_flow=Decimal("100000000000"),  # $100B FCF
+                )
+            ],
+            source="yahoo",
+        )
+
+        _run(flow.valuation_analysis())
+
+        assert flow.state.valuation is not None
+        assert flow.state.valuation.dcf_value is not None
+        assert flow.state.valuation.dcf_value > 0
+        # Both methods contribute → averaged intrinsic + dcf_relative_peg method.
+        assert flow.state.valuation.method == "dcf_relative_peg"
+        # Intrinsic should be the average of dcf_value and relative_value.
+        assert flow.state.valuation.intrinsic_value_per_share is not None
+        expected_avg = (
+            flow.state.valuation.dcf_value + flow.state.valuation.relative_value
+        ) / 2
+        assert flow.state.valuation.intrinsic_value_per_share == expected_avg
+
+    def test_dcf_none_when_fcf_negative(self, sample_market):
+        """Negative FCF → DCF returns None → fall back to relative_only."""
+        flow = AnalysisFlow()
+        flow.state.ticker = "AAPL"
+        flow.state.market = sample_market
+        flow.state.financial = FinancialStatements(
+            ticker="AAPL",
+            cash_flows=[
+                CashFlowStatement(
+                    period="TTM",
+                    fiscal_year=2026,
+                    operating_cash_flow=Decimal("-5000000000"),
+                    free_cash_flow=Decimal("-10000000000"),  # negative FCF
+                )
+            ],
+            source="yahoo",
+        )
+
+        _run(flow.valuation_analysis())
+
+        assert flow.state.valuation is not None
+        assert flow.state.valuation.dcf_value is None
         assert flow.state.valuation.method == "relative_only"
 
     def test_market_missing_handled_gracefully(self):

@@ -429,28 +429,58 @@ class AnalysisFlow(Flow[AnalysisState]):
             current * Decimal(str(peer_pe_avg / pe)) if pe > 0 else current
         )
 
-        # DCF: skipped (data often missing in MVP)
+        # DCF: 用最近年度 FCF + market growth + 默认 WACC/g_term 算 intrinsic value
+        from alphaquant.scoring.dcf import compute_dcf_value
+
         dcf_value = None
-        upside = float((relative_value - current) / current) if current else 0.0
+        fcf_data = (
+            self.state.financial.cash_flows[0].free_cash_flow
+            if self.state.financial and self.state.financial.cash_flows
+            else None
+        )
+        growth_pct = self.state.market.revenue_growth_yoy  # e.g. 5.0 means 5%
+        growth_rate = ((growth_pct / 100.0) if growth_pct is not None else 0.05)
+        shares_outstanding = (
+            int(self.state.market.market_cap / self.state.market.price)
+            if self.state.market.price > 0
+            else 0
+        )
+        if fcf_data is not None and fcf_data > 0 and shares_outstanding > 0:
+            dcf_value = compute_dcf_value(
+                fcf=fcf_data,
+                growth_rate=growth_rate,
+                shares_outstanding=shares_outstanding,
+            )
+
+        # 内含价值：DCF 和 relative 的平均（如果有 DCF）；只有 relative 时退化
+        if dcf_value is not None and relative_value is not None:
+            intrinsic = (dcf_value + relative_value) / 2
+            method = "dcf_relative_peg"
+        else:
+            intrinsic = relative_value
+            method = "relative_only"
+
+        upside = float((intrinsic - current) / current) if current else 0.0
 
         self.state.valuation = ValuationResult(
             ticker=self.state.ticker,
-            intrinsic_value_per_share=relative_value,
+            intrinsic_value_per_share=intrinsic,
             current_price=current,
             upside_pct=round(upside, 4),
             dcf_value=dcf_value,
             relative_value=relative_value,
             peg_ratio=None,
-            method="relative_only",
+            method=method,  # type: ignore[arg-type]
             assumptions={"peer_pe_avg": peer_pe_avg},
         )
         log.info(
             "flow_step_completed",
             step="valuation_analysis",
             ticker=self.state.ticker,
-            method="relative_only",
+            method=method,
             current_price=float(current),
-            intrinsic_value=float(relative_value),
+            intrinsic_value=float(intrinsic),
+            dcf_value=float(dcf_value) if dcf_value is not None else None,
             upside_pct=round(upside, 4),
         )
 
