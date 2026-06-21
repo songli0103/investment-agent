@@ -72,7 +72,7 @@ except Exception as exc:  # pragma: no cover - export best-effort
 st.subheader("Service")
 
 try:
-    from alphaquant.config import get_settings  # type: ignore[import-not-found]
+    from alphaquant.infrastructure.config import get_settings  # type: ignore[import-not-found]
 
     settings = get_settings()
     st.write(f"**LLM model:** `{settings.litellm_model}`")

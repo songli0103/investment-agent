@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import asyncio
 
-from alphaquant.data_sources.alpha_vantage import AlphaVantageSource
-from alphaquant.data_sources.base import DataSourceInterface
-from alphaquant.data_sources.finnhub import FinnhubSource
-from alphaquant.data_sources.news import NewsAPISource
-from alphaquant.data_sources.sec_edgar import SECEdgarSource
-from alphaquant.data_sources.yahoo import YahooFinanceSource
+from alphaquant.infrastructure.data_sources.alpha_vantage import AlphaVantageSource
+from alphaquant.infrastructure.data_sources.base import DataSourceInterface
+from alphaquant.infrastructure.data_sources.finnhub import FinnhubSource
+from alphaquant.infrastructure.data_sources.news import NewsAPISource
+from alphaquant.infrastructure.data_sources.sec_edgar import SECEdgarSource
+from alphaquant.infrastructure.data_sources.yahoo import YahooFinanceSource
 from alphaquant.exceptions import AllDataSourcesDown, PartialDataFailure
 from alphaquant.models.company import Company
 from alphaquant.models.financial import FinancialStatements

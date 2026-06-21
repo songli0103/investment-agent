@@ -6,7 +6,7 @@ import sys
 
 import structlog
 
-from alphaquant.config import get_settings
+from alphaquant.infrastructure.config import get_settings
 
 
 def configure_logging() -> None:

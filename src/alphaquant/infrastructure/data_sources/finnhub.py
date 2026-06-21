@@ -4,8 +4,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 
-from alphaquant.config import get_settings
-from alphaquant.data_sources.base import DataSourceInterface
+from alphaquant.infrastructure.config import get_settings
+from alphaquant.infrastructure.data_sources.base import DataSourceInterface
 from alphaquant.models.company import Company
 from alphaquant.models.financial import FinancialStatements
 from alphaquant.models.market import MarketData

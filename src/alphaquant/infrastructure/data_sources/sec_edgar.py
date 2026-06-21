@@ -6,7 +6,7 @@ import re
 
 import httpx
 
-from alphaquant.data_sources.base import DataSourceInterface
+from alphaquant.infrastructure.data_sources.base import DataSourceInterface
 from alphaquant.models.company import Company
 from alphaquant.models.financial import FinancialStatements
 from alphaquant.models.market import MarketData

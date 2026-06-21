@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from crewai.tools import BaseTool
 
-from alphaquant.data_sources import DataSourceRegistry
+from alphaquant.infrastructure.data_sources import DataSourceRegistry
 from alphaquant.models.competitor import Competitor
 
 
@@ -13,7 +13,7 @@ class CompetitorTool(BaseTool):
 
     def _run(self, ticker: str) -> str:
         import asyncio
-        from alphaquant.data_sources.yahoo import YahooFinanceSource
+        from alphaquant.infrastructure.data_sources.yahoo import YahooFinanceSource
 
         def _get_company():
             src = YahooFinanceSource()

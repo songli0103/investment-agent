@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import yfinance as yf
 
-from alphaquant.data_sources.base import DataSourceInterface
+from alphaquant.infrastructure.data_sources.base import DataSourceInterface
 from alphaquant.models.company import Company
 from alphaquant.models.financial import (
     BalanceSheet,

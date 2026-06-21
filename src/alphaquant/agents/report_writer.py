@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from crewai import Agent
 
-from alphaquant.llm import get_llm
+from alphaquant.infrastructure.llm import get_llm
 
 
 def build_report_writer_agent() -> Agent:

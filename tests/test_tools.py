@@ -299,7 +299,7 @@ class TestCompetitorTool:
             async def get_market_data(self, ticker):
                 return None
 
-        with patch("alphaquant.data_sources.yahoo.YahooFinanceSource", FakeSrc):
+        with patch("alphaquant.infrastructure.data_sources.yahoo.YahooFinanceSource", FakeSrc):
             result = CompetitorTool()._run("ZZZZ")
 
         assert "No company info for ZZZZ" in result
@@ -335,7 +335,7 @@ class TestCompetitorTool:
                     return market
                 return None
 
-        with patch("alphaquant.data_sources.yahoo.YahooFinanceSource", FakeSrc):
+        with patch("alphaquant.infrastructure.data_sources.yahoo.YahooFinanceSource", FakeSrc):
             result = CompetitorTool()._run("XYZ")
 
         # Should mention SPY (the fallback peer)
@@ -372,7 +372,7 @@ class TestCompetitorTool:
             async def get_market_data(self, ticker):
                 return make_market(ticker)
 
-        with patch("alphaquant.data_sources.yahoo.YahooFinanceSource", FakeSrc):
+        with patch("alphaquant.infrastructure.data_sources.yahoo.YahooFinanceSource", FakeSrc):
             result = CompetitorTool()._run("AAPL")
 
         # Technology peers: MSFT, GOOGL, META — AAPL itself filtered out
@@ -399,7 +399,7 @@ class TestCompetitorTool:
             async def get_market_data(self, ticker):
                 return None  # all peers fail
 
-        with patch("alphaquant.data_sources.yahoo.YahooFinanceSource", FakeSrc):
+        with patch("alphaquant.infrastructure.data_sources.yahoo.YahooFinanceSource", FakeSrc):
             result = CompetitorTool()._run("XYZ")
 
         assert "No peer data available" in result

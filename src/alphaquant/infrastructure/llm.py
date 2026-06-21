@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from crewai import LLM
 
-from alphaquant.config import Settings, get_settings
+from alphaquant.infrastructure.config import Settings, get_settings
 
 
 def get_llm(

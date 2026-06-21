@@ -10,7 +10,7 @@ from typing import Any
 from crewai.flow import Flow, listen, start
 from pydantic import BaseModel, Field
 
-from alphaquant.data_sources import DataSourceRegistry
+from alphaquant.infrastructure.data_sources import DataSourceRegistry
 from alphaquant.exceptions import (
     AllDataSourcesDown,
     InvalidTickerFormat,

@@ -71,7 +71,7 @@ def captured_logs():
 
     import alphaquant.core as core_mod
     import alphaquant.flows.analysis_flow as flow_mod
-    import alphaquant.data_sources as data_sources_mod
+    import alphaquant.infrastructure.data_sources as data_sources_mod
     import alphaquant.observability.cost_tracker as cost_tracker
     cost_tracker.log = structlog.get_logger()
     core_mod.log = structlog.get_logger("alphaquant.core")
@@ -361,7 +361,7 @@ def test_kickoff_with_timeout_emits_flow_timeout(captured_logs):
 
 def test_data_sources_uses_observability_logger():
     """data_sources package must use the observability get_logger abstraction."""
-    import alphaquant.data_sources as ds
+    import alphaquant.infrastructure.data_sources as ds
 
     log = ds.log
     for attr in ("info", "warning", "error", "debug"):

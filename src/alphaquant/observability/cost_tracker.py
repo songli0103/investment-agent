@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import structlog
 
-from alphaquant.config import get_settings
+from alphaquant.infrastructure.config import get_settings
 
 log = structlog.get_logger()
 

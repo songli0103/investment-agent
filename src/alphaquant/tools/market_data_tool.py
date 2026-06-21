@@ -4,7 +4,7 @@ from __future__ import annotations
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from alphaquant.data_sources import DataSourceRegistry
+from alphaquant.infrastructure.data_sources import DataSourceRegistry
 
 
 class MarketDataInput(BaseModel):

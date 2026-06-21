@@ -199,7 +199,7 @@ class TestResolveCompany:
         flow = AnalysisFlow()
         with patch.object(
             DataSourceRegistry := __import__(
-                "alphaquant.data_sources", fromlist=["DataSourceRegistry"]
+                "alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]
             ).DataSourceRegistry,
             "get_company",
             new=AsyncMock(return_value=sample_company),
@@ -211,7 +211,7 @@ class TestResolveCompany:
     def test_propagates_all_data_sources_down(self):
         flow = AnalysisFlow()
         with patch.object(
-            __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
+            __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
             "get_company",
             new=AsyncMock(side_effect=AllDataSourcesDown("boom")),
         ):
@@ -265,17 +265,17 @@ class TestParallelDataCollection:
         news_items = self._news_items()
 
         registry_patch = patch.object(
-            __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
+            __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
             "get_market",
             new=AsyncMock(return_value=sample_market),
         )
         news_patch = patch.object(
-            __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
+            __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
             "get_news",
             new=AsyncMock(return_value=news_items),
         )
         fin_patch = patch.object(
-            __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
+            __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry,
             "get_financial",
             new=AsyncMock(return_value=sample_financial),
         )
@@ -296,7 +296,7 @@ class TestParallelDataCollection:
         """§3.2: empty list from registry → NewsAnalysis.empty()."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
-        reg = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        reg = __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         with patch.object(reg, "get_market", new=AsyncMock(return_value=sample_market)), \
              patch.object(reg, "get_news", new=AsyncMock(return_value=[])), \
              patch.object(reg, "get_financial", new=AsyncMock(return_value=sample_financial)):
@@ -312,7 +312,7 @@ class TestParallelDataCollection:
         """§3.2: market failure → degraded (None), continue."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
-        reg = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        reg = __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         with patch.object(reg, "get_market", new=AsyncMock(side_effect=Exception("fail"))), \
              patch.object(reg, "get_news", new=AsyncMock(return_value=self._news_items())), \
              patch.object(reg, "get_financial", new=AsyncMock(return_value=sample_financial)):
@@ -325,7 +325,7 @@ class TestParallelDataCollection:
         """§3.2: news exception → NewsAnalysis.empty(), continue."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
-        reg = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        reg = __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         with patch.object(reg, "get_market", new=AsyncMock(return_value=sample_market)), \
              patch.object(reg, "get_news", new=AsyncMock(side_effect=Exception("fail"))), \
              patch.object(reg, "get_financial", new=AsyncMock(return_value=sample_financial)):
@@ -339,7 +339,7 @@ class TestParallelDataCollection:
         """§3.2: financial failure → empty FinancialStatements, continue."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
-        reg = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        reg = __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         with patch.object(reg, "get_market", new=AsyncMock(return_value=sample_market)), \
              patch.object(reg, "get_news", new=AsyncMock(return_value=self._news_items())), \
              patch.object(reg, "get_financial", new=AsyncMock(side_effect=Exception("fail"))):
@@ -666,7 +666,7 @@ class TestFlowKickoff:
         # Build the Flow instance directly (avoid crewai kickoff side-effects)
         flow = AnalysisFlow()
 
-        reg_cls = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        reg_cls = __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         news_items = [
             NewsItem(
                 date=date(2026, 6, 19),
@@ -706,7 +706,7 @@ class TestFlowKickoff:
         from alphaquant.models.news import NewsItem
 
         flow = AnalysisFlow()
-        reg_cls = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        reg_cls = __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         news_items = [
             NewsItem(
                 date=date(2026, 6, 19),
@@ -751,7 +751,7 @@ class TestFlowKickoff:
         from alphaquant.models.news import NewsItem
 
         flow = AnalysisFlow()
-        reg_cls = __import__("alphaquant.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
+        reg_cls = __import__("alphaquant.infrastructure.data_sources", fromlist=["DataSourceRegistry"]).DataSourceRegistry
         news_items = [
             NewsItem(
                 date=date(2026, 6, 19),
