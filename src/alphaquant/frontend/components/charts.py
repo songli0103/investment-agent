@@ -5,7 +5,7 @@ from typing import Iterable
 
 import plotly.graph_objects as go
 
-from alphaquant.frontend.models import ReportRecord
+from alphaquant.infrastructure.persistence import ReportRecord
 from alphaquant.models.news import NewsAnalysis
 from alphaquant.models.risk import RiskAssessment
 

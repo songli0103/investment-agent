@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from alphaquant.frontend.components.charts import render_history_lines
-from alphaquant.frontend.db import DB
+from alphaquant.infrastructure.persistence import DB
 
 
 st.title("History")
@@ -72,7 +72,7 @@ df_display = df.sort_values("generated_at", ascending=False).reset_index(drop=Tr
 
 # The chart wants ReportRecord-shaped objects. Re-hydrate the cache's dicts
 # into the public model so render_history_lines' type contract is satisfied.
-from alphaquant.frontend.models import ReportRecord  # local import: avoid cycles in tests
+from alphaquant.infrastructure.persistence import ReportRecord  # local import: avoid cycles in tests
 
 records = [
     ReportRecord(

@@ -7,8 +7,7 @@ from decimal import Decimal
 
 import pytest
 
-from alphaquant.frontend.db import DB
-from alphaquant.frontend.models import ReportRecord
+from alphaquant.infrastructure.persistence import DB, ReportRecord
 from alphaquant.models.company import Company
 from alphaquant.models.competitor import Competitor, CompetitorAnalysis
 from alphaquant.models.financial import FinancialStatements

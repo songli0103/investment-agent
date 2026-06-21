@@ -10,7 +10,7 @@ import os
 
 import streamlit as st
 
-from alphaquant.frontend.db import DB
+from alphaquant.infrastructure.persistence import DB
 
 st.title("Settings")
 

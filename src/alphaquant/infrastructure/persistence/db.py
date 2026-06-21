@@ -7,7 +7,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
-from alphaquant.frontend.models import ReportRecord
+from alphaquant.infrastructure.persistence.models import ReportRecord
 from alphaquant.models.report import InvestmentReport
 
 

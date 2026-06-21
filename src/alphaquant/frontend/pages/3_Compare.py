@@ -29,7 +29,7 @@ from alphaquant.frontend.components.charts import (
     _risk_axis_value,
 )
 from alphaquant.frontend.components.rating_card import render_rating_card
-from alphaquant.frontend.db import DB
+from alphaquant.infrastructure.persistence import DB
 from alphaquant.main import run_analysis_async
 from alphaquant.models.report import InvestmentReport
 

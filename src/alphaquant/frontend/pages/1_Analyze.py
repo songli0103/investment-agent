@@ -16,7 +16,7 @@ from alphaquant.frontend.components.charts import (
 )
 from alphaquant.frontend.components.metrics_panel import render_metrics_panel
 from alphaquant.frontend.components.rating_card import render_rating_card
-from alphaquant.frontend.db import DB
+from alphaquant.infrastructure.persistence import DB
 from alphaquant.main import run_analysis_async
 
 
