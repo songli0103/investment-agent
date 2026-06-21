@@ -568,11 +568,11 @@ class TestFlowKickoff:
         sample_financial,
         sample_competitor_analysis,
     ):
-        """§3.4: kickoff_with_timeout returns within 180s for a fast flow.
+        """§3.4: kickoff_with_timeout returns within FLOW_TIMEOUT_SECONDS for a fast flow.
 
         Sub-project 2: tool _run methods are mocked instead of registry.
-
         Sub-project 3: include Pydantic instances in tasks_output 4-7.
+        Sub-project 3: FLOW_TIMEOUT_SECONDS widened 180→600 for real LLM latency.
         """
         flow = AnalysisFlow()
 
@@ -611,9 +611,10 @@ class TestFlowKickoff:
         assert flow.state.report.ticker == "AAPL"
 
     def test_kickoff_with_timeout_enforces_limit(self):
-        """§3.4: a slow kickoff_async → asyncio.TimeoutError after 120s.
+        """§3.4: a slow kickoff_async → asyncio.TimeoutError after FLOW_TIMEOUT_SECONDS.
 
         We patch FLOW_TIMEOUT_SECONDS to a tiny value so the test runs quickly.
+        Sub-project 3: FLOW_TIMEOUT_SECONDS widened 180→600 for real LLM latency.
         """
         import time
 
@@ -1279,3 +1280,24 @@ class TestExtractDataField:
         model, err = _extract_data_field("", MarketData, "market_data_unavailable")
         assert model is None
         assert err == "market_data_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Sub-3: FLOW_TIMEOUT_SECONDS widening (Step 1)
+# ---------------------------------------------------------------------------
+
+
+class TestFlowTimeoutConstant:
+    """Sub-3: FLOW_TIMEOUT_SECONDS widened 180→600s to absorb real LLM latency.
+
+    The previous 180s was too short for production: 4 parallel data fetches
+    (~30s each) + 3 parallel LLM analysis tasks (~60-90s) + 1 ReportWriter
+    task (~30-60s) + manager overhead totals 120-180s; 600s gives 3-4x
+    headroom.
+    """
+
+    def test_flow_timeout_seconds_is_600(self):
+        """FLOW_TIMEOUT_SECONDS must be 600.0 (sub-3 widening)."""
+        from alphaquant.flows.analysis_flow import FLOW_TIMEOUT_SECONDS
+
+        assert FLOW_TIMEOUT_SECONDS == 600.0
