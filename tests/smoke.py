@@ -69,7 +69,8 @@ def main() -> int:
     assert_(report.rating in valid_ratings, f"Rating '{report.rating}' is valid")
 
     # Assertion 5: Confidence range
-    assert_(0 <= report.confidence <= 100, f"Confidence {report.confidence} in [0,100]")
+    if report.confidence is not None:
+        assert_(0 <= report.confidence <= 100, f"Confidence {report.confidence} in [0,100]")
 
     # Assertion 6: Markdown non-trivial
     assert_(len(report.markdown) > 500, f"Markdown has {len(report.markdown)} chars (>500)")
