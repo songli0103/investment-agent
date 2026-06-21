@@ -2,26 +2,25 @@
 from __future__ import annotations
 
 from crewai import Agent
+from crewai.llm import LLM
 
-from alphaquant.infrastructure.llm import get_llm
 
-
-def build_report_writer_agent() -> Agent:
+def build_report_writer_agent(llm: LLM) -> Agent:
     return Agent(
-        role="Equity Research Editor",
+        role="Investment Report Synthesizer",
         goal=(
-            "Synthesize all upstream analysis into a structured investment research report "
-            "with executive summary, sections per dimension, and a clear rating."
+            "Synthesize all upstream data (company, market, financial, news, "
+            "competitor, risk, valuation) into a final InvestmentReport markdown."
         ),
         backstory=(
-            "You are a senior sell-side equity research editor. You take raw analysis "
-            "from market, financial, news, competitor, risk, and valuation analysts and "
-            "produce a publication-quality Markdown report. You cite the data you reference. "
-            "You always append a disclaimer."
+            "You are an investment writer. You read everything from shared memory "
+            "and produce a clear, structured markdown report with rating, "
+            "confidence, and rationale."
         ),
-        llm=get_llm(temperature=0.4, max_tokens=6000),
+        tools=[],
+        llm=llm,
         allow_delegation=False,
-        verbose=True,
+        verbose=False,
     )
 
 

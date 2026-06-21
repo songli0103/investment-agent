@@ -2,25 +2,24 @@
 from __future__ import annotations
 
 from crewai import Agent
+from crewai.llm import LLM
 
-from alphaquant.infrastructure.llm import get_llm
 
-
-def build_risk_analyst_agent() -> Agent:
+def build_risk_analyst_agent(llm: LLM) -> Agent:
     return Agent(
-        role="Risk Management Specialist",
+        role="Risk Assessment Specialist",
         goal=(
-            "Assess investment risks across 6 categories (financial, operational, market, "
-            "regulatory, governance, macro) and produce a risk score 0-100."
+            "Compute risk assessment from upstream data already in shared memory "
+            "(company, market, financial). Report sub-scores per category."
         ),
         backstory=(
-            "You are a risk expert. You evaluate financial leverage, business model "
-            "fragility, regulatory exposure, and management quality. You assign each "
-            "risk category a score 0-10 and provide concrete evidence for each."
+            "You are a risk officer. You read financial ratios (debt ratio, beta) "
+            "from memory and assign risk scores 0-10 per category."
         ),
-        llm=get_llm(temperature=0.2),
+        tools=[],
+        llm=llm,
         allow_delegation=False,
-        verbose=True,
+        verbose=False,
     )
 
 

@@ -2,27 +2,26 @@
 from __future__ import annotations
 
 from crewai import Agent
+from crewai.llm import LLM
 
-from alphaquant.infrastructure.llm import get_llm
 from alphaquant.tools.news_tool import NewsTool
 
 
-def build_news_analyst_agent() -> Agent:
+def build_news_analyst_agent(llm: LLM) -> Agent:
     return Agent(
-        role="News Sentiment Analyst",
+        role="News Retrieval Specialist",
         goal=(
-            "Aggregate recent news for a ticker, classify sentiment (positive/negative/neutral), "
-            "and identify key events."
+            "Fetch recent news (last 30 days) for a US stock ticker. "
+            "Report news items verbatim - do not editorialize."
         ),
         backstory=(
-            "You are an NLP-savvy financial journalist. You read news articles and "
-            "extract the underlying sentiment, identify major events (earnings, M&A, "
-            "regulatory), and produce a sentiment score from -1 to +1."
+            "You are a news data fetcher. You call news_lookup exactly once "
+            "with the ticker and return its JSON output as-is."
         ),
         tools=[NewsTool()],
-        llm=get_llm(temperature=0.2),
+        llm=llm,
         allow_delegation=False,
-        verbose=True,
+        verbose=False,
     )
 
 

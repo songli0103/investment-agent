@@ -2,27 +2,26 @@
 from __future__ import annotations
 
 from crewai import Agent
+from crewai.llm import LLM
 
-from alphaquant.infrastructure.llm import get_llm
 from alphaquant.tools.financial_tool import FinancialTool
 
 
-def build_financial_analyst_agent() -> Agent:
+def build_financial_analyst_agent(llm: LLM) -> Agent:
     return Agent(
-        role="CFA Financial Analyst",
+        role="Financial Statements Specialist",
         goal=(
-            "Analyze financial statements (income, balance sheet, cash flow) and "
-            "compute key ratios: gross margin, ROE, debt-to-equity, FCF quality."
+            "Fetch income statements, balance sheets, and cash flow statements "
+            "for a US stock ticker. Report data verbatim - do not calculate ratios."
         ),
         backstory=(
-            "You are a CFA charterholder. You analyze three-statement models with rigor. "
-            "You never invent numbers; if a value is missing from the tool output, you "
-            "report null. You identify trends across the last 4 fiscal years."
+            "You are a financial data fetcher. You call financial_statements_lookup "
+            "exactly once with the ticker and return its JSON output as-is."
         ),
         tools=[FinancialTool()],
-        llm=get_llm(temperature=0.0),
+        llm=llm,
         allow_delegation=False,
-        verbose=True,
+        verbose=False,
     )
 
 

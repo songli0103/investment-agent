@@ -2,26 +2,26 @@
 from __future__ import annotations
 
 from crewai import Agent
+from crewai.llm import LLM
 
-from alphaquant.infrastructure.llm import get_llm
 from alphaquant.tools.competitor_tool import CompetitorTool
 
 
-def build_competitor_analyst_agent() -> Agent:
+def build_competitor_analyst_agent(llm: LLM) -> Agent:
     return Agent(
-        role="Industry Research Analyst",
+        role="Competitive Landscape Analyst",
         goal=(
-            "Identify 3-5 publicly traded competitors in the same GICS sub-industry, "
-            "compare them on size, growth, and profitability."
+            "Identify and rank competitors for a US stock ticker. "
+            "Return peer tickers, market caps, growth, margins."
         ),
         backstory=(
-            "You are an industry research expert. You map public companies to GICS "
-            "sub-industries and select the most relevant peers for comparison."
+            "You are a sell-side equity analyst. You call competitor_lookup "
+            "with the ticker, then summarize the peer set with industry rank."
         ),
         tools=[CompetitorTool()],
-        llm=get_llm(temperature=0.3),
+        llm=llm,
         allow_delegation=False,
-        verbose=True,
+        verbose=False,
     )
 
 

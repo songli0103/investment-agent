@@ -2,27 +2,27 @@
 from __future__ import annotations
 
 from crewai import Agent
+from crewai.llm import LLM
 
-from alphaquant.infrastructure.llm import get_llm
 from alphaquant.tools.market_data_tool import MarketDataTool
 
 
-def build_market_analyst_agent() -> Agent:
+def build_market_analyst_agent(llm: LLM) -> Agent:
     return Agent(
-        role="Senior Market Analyst",
+        role="Market Data Specialist",
         goal=(
-            "Analyze market data for a US stock: price, valuation multiples, "
-            "and generate a trend commentary."
+            "Fetch real-time market data (price, P/E, market cap, 52-week range, "
+            "beta, growth metrics) for a US stock ticker. Report data verbatim - "
+            "do not interpret or summarize."
         ),
         backstory=(
-            "You are a Wall Street veteran market analyst. You interpret price, "
-            "P/E, P/B, beta, and 52-week range to assess valuation and momentum. "
-            "You always cite the data points you reference."
+            "You are a quantitative data fetcher. You call market_data_lookup "
+            "exactly once with the ticker and return its JSON output as-is."
         ),
         tools=[MarketDataTool()],
-        llm=get_llm(temperature=0.3),
+        llm=llm,
         allow_delegation=False,
-        verbose=True,
+        verbose=False,
     )
 
 

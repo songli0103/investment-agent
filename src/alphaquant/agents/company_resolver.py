@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 from crewai import Agent
+from crewai.llm import LLM
 
-from alphaquant.infrastructure.llm import get_llm
 
-
-def build_company_resolver_agent() -> Agent:
+def build_company_resolver_agent(llm: LLM) -> Agent:
     return Agent(
         role="Company Identification Specialist",
         goal="Validate and standardize ticker symbols, resolve company metadata.",
@@ -15,9 +14,10 @@ def build_company_resolver_agent() -> Agent:
             "Given a ticker, you return the canonical company name, exchange, "
             "sector, industry, and market cap. You never invent data."
         ),
-        llm=get_llm(temperature=0.0),
+        tools=[],
+        llm=llm,
         allow_delegation=False,
-        verbose=True,
+        verbose=False,
     )
 
 
