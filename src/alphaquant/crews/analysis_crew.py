@@ -1,14 +1,16 @@
 """AnalysisCrew: 8-agent CrewAI Crew orchestrating the analysis pipeline.
 
-Sub-project 1 (this file): Crew is built with Process.hierarchical and a
-shared manager_llm, but ``memory=False`` and agents are 'thin' wrappers
-calling the existing data tools. Sub-project 4 will enable ``memory`` and
+Sub-project 1: Crew is built with Process.hierarchical and a shared
+manager_llm, but ``memory=False`` and agents are 'thin' wrappers calling
+the existing data tools. Sub-project 4 will enable ``memory`` and
 ``allow_delegation=True``.
 
-The Flow (``flows/analysis_flow.py``) pre-fetches all raw data
-(company / market / news / financial) via ``DataSourceRegistry`` and passes
-it in ``inputs``. After ``kickoff`` returns, ``parse_crew_output()``
-extracts the agent outputs into ``AnalysisState``.
+Sub-project 2: The 4 data agents (CompanyResolver, MarketAnalyst,
+NewsAnalyst, FinancialAnalyst) fetch their own data via the data tools
+(``CompanyLookupTool`` + the 3 existing data tools) inside the Crew.
+The Flow (``flows/analysis_flow.py``) is now pure orchestration: it
+passes only ``{"ticker": ...}`` to ``crew.kickoff`` and calls
+``parse_crew_output()`` on the result to populate ``AnalysisState``.
 """
 from __future__ import annotations
 
