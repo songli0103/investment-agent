@@ -100,14 +100,21 @@ class AnalysisCrew:
         ]
 
     def _build_tasks(self) -> list[Task]:
+        # Sub-project 2: first 4 (data) tasks run in parallel via
+        # Task(async_execution=True). Manager LLM schedules them concurrently
+        # in the hierarchical process. Remaining 4 (analysis) tasks stay
+        # sequential (default CrewAI behavior in hierarchical mode).
+        _ASYNC_TASK_INDICES = {0, 1, 2, 3}
+
         tasks: list[Task] = []
-        for role_key, description, expected in _TASK_TEMPLATES:
-            agent = self.agents[len(tasks)]
+        for idx, (role_key, description, expected) in enumerate(_TASK_TEMPLATES):
+            agent = self.agents[idx]
             tasks.append(
                 Task(
                     description=description,
                     expected_output=expected,
                     agent=agent,
+                    async_execution=(idx in _ASYNC_TASK_INDICES),
                 )
             )
         return tasks

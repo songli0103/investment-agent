@@ -160,3 +160,26 @@ class TestAnalysisCrew:
             )
             for tool, expected_cls in zip(agent.tools, expected_classes):
                 assert isinstance(tool, expected_cls)
+
+    def test_data_tasks_have_async_execution(self, monkeypatch, fake_llm):
+        """Sub-project 2: 4 data tasks (company/market/news/financial) run in parallel."""
+        monkeypatch.setattr(
+            "alphaquant.crews.analysis_crew.get_llm", lambda **kw: fake_llm
+        )
+        from alphaquant.crews import AnalysisCrew
+
+        crew = AnalysisCrew()
+
+        # First 4 tasks are data tasks (per _TASK_TEMPLATES order).
+        data_tasks = crew.tasks[:4]
+        for task in data_tasks:
+            assert task.async_execution is True, (
+                f"Task '{task.description[:40]}...' should run in parallel"
+            )
+
+        # Remaining 4 tasks are analysis tasks (deterministic, sequential).
+        analysis_tasks = crew.tasks[4:]
+        for task in analysis_tasks:
+            assert task.async_execution in (False, None), (
+                f"Task '{task.description[:40]}...' should run sequentially"
+            )

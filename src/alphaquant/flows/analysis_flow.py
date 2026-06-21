@@ -34,7 +34,7 @@ from alphaquant.exceptions import (
     InvalidTickerFormat,
     ReportGenerationError,
 )
-from alphaquant.infrastructure.data_sources import DataSourceRegistry
+from alphaquant.models.company import Company
 from alphaquant.models.competitor import Competitor, CompetitorAnalysis
 from alphaquant.models.financial import FinancialStatements
 from alphaquant.models.market import MarketData
@@ -48,8 +48,9 @@ from alphaquant.scoring.rating import determine_rating
 
 log = get_logger("alphaquant.flows.analysis_flow")
 
-# §3.4: whole-Flow timeout (per spec).
-FLOW_TIMEOUT_SECONDS = 120.0
+# §3.4: whole-Flow timeout. Sub-project 2 widens 120→180s to absorb
+# 4 parallel data fetches (~30s each) + manager LLM decisions (~2s each).
+FLOW_TIMEOUT_SECONDS = 180.0
 
 
 # §3.2: GICS peer fallback map. Each sector maps to 3 well-known US large-cap
@@ -225,47 +226,129 @@ def parse_crew_output(
 ) -> dict[str, Any]:
     """Extract agent outputs from ``CrewOutput`` and (optionally) fill state.
 
-    Sub-project 1: each task output's ``raw`` text is assumed to be JSON. We
-    parse it and dispatch by task order into the per-key fallback logic.
-    Sub-project 3 will let agents produce structured Pydantic outputs instead.
+    Sub-project 2: each task output's ``raw`` text is either JSON (success)
+    or an error string matching the ``"Error..."`` / ``"No ..."`` /
+    ``"...data available..."`` convention from the 4 data tools. We parse
+    the 4 data fields (company, market, news, financial) and populate
+    ``state`` accordingly. ``AllDataSourcesDown`` is raised for company
+    fetch failure (preserves the FastAPI error code path).
 
-    Returns a ``{role_key: parsed_data}`` mapping so callers (and tests) can
-    inspect what was extracted. When ``state`` is provided, this function
-    ALSO mutates ``state`` in place, populating the ``competitor``,
-    ``risk``, and ``valuation`` fields via the same deterministic fallback
-    the legacy Flow used.
+    Returns a ``{role_key: parsed_data}`` mapping so callers (and tests)
+    can inspect what was extracted. When ``state`` is provided, this
+    function ALSO mutates ``state`` in place.
     """
     tasks_output = getattr(result, "tasks_output", []) or []
     extracted: dict[str, Any] = {}
 
-    # Build a {key: data} lookup from the actual tasks, indexed by role_key.
-    by_key: dict[str, dict[str, Any]] = {}
+    # Build a {key: raw_text} lookup from the actual tasks, indexed by role_key.
+    raw_by_key: dict[str, str] = {}
     for idx, task_out in enumerate(tasks_output):
         if idx >= len(_TASK_KEYWORDS):
             break
         key = _TASK_KEYWORDS[idx]
-        raw = getattr(task_out, "raw", "") or ""
-        try:
-            data = json.loads(raw) if raw.strip().startswith("{") else {}
-        except (json.JSONDecodeError, ValueError):
-            data = {}
-        by_key[key] = data
-        extracted[key] = data
+        raw_by_key[key] = getattr(task_out, "raw", "") or ""
+        extracted[key] = raw_by_key[key]
 
-    # If no state was provided, we only collect the parsed data.
+    # If no state was provided, we only collect the raw text.
     if state is None:
         return extracted
 
-    # Always populate competitor / risk / valuation with the deterministic
-    # fallback (matching pre-refactor Flow behavior). The agent's JSON output,
-    # when present, overrides the peer list / sub-scores; the math stays the
-    # same. Sub-project 1 keeps this; sub-project 3 will let agents produce
-    # fully structured Pydantic outputs and remove the fallback paths.
-    _populate_competitor(state, by_key.get("competitor_analyst") or {})
-    _populate_risk(state, by_key.get("risk_analyst") or {})
-    _populate_valuation(state, by_key.get("valuation_analyst") or {})
+    # --- Sub-project 2: parse 4 data fields from agent task outputs ---
+
+    # 1. Company (critical path — failure raises AllDataSourcesDown)
+    company, company_err = _extract_data_field(
+        raw_by_key.get("company_resolver", ""),
+        Company,
+        "company_data_unavailable",
+    )
+    if company is None:
+        raise AllDataSourcesDown(
+            f"Cannot resolve {state.ticker}: company data unavailable"
+        )
+    state.company = company
+
+    # 2. Market (degraded: None + error)
+    state.market, market_err = _extract_data_field(
+        raw_by_key.get("market_analyst", ""),
+        MarketData,
+        "market_data_unavailable",
+    )
+    if market_err:
+        state.errors.append(market_err)
+
+    # 3. News (degraded: empty NewsAnalysis + error). Tool returns JSON list.
+    news_raw = raw_by_key.get("news_analyst", "").strip()
+    if not news_raw or news_raw.startswith("Error") or news_raw.startswith("No ") or "data available" in news_raw.lower():
+        state.news = NewsAnalysis.empty(state.ticker)
+        state.errors.append("news_data_unavailable")
+    else:
+        try:
+            items_raw = json.loads(news_raw)
+            news_items = [NewsItem(**i) for i in items_raw]
+            state.news = _news_items_to_analysis(news_items, state.ticker)
+        except Exception:
+            state.news = NewsAnalysis.empty(state.ticker)
+            state.errors.append("news_data_unavailable")
+
+    # 4. Financial (degraded: empty FinancialStatements shell + error)
+    state.financial, fin_err = _extract_data_field(
+        raw_by_key.get("financial_analyst", ""),
+        FinancialStatements,
+        "financial_data_unavailable",
+    )
+    if state.financial is None:
+        state.financial = FinancialStatements(ticker=state.ticker)
+        state.errors.append(fin_err or "financial_data_unavailable")
+
+    # --- Competitor / Risk / Valuation: deterministic fallback (unchanged from sub-1) ---
+    _populate_competitor(state, _safe_parse(raw_by_key.get("competitor_analyst", "")))
+    _populate_risk(state, _safe_parse(raw_by_key.get("risk_analyst", "")))
+    _populate_valuation(state, _safe_parse(raw_by_key.get("valuation_analyst", "")))
 
     return extracted
+
+
+def _safe_parse(raw: str) -> dict[str, Any]:
+    """Parse a JSON object string → dict. Returns empty dict on any failure."""
+    raw = (raw or "").strip()
+    if not raw or not raw.startswith("{"):
+        return {}
+    try:
+        result = json.loads(raw)
+        return result if isinstance(result, dict) else {}
+    except (json.JSONDecodeError, ValueError):
+        return {}
+
+
+def _extract_data_field(
+    raw: str, model_cls: type, error_msg: str
+) -> tuple[Any | None, str | None]:
+    """Parse a tool output string into a Pydantic model, or return None + error.
+
+    Order of failure detection:
+      1. Empty / whitespace-only → failure
+      2. Starts with "Error" / "No " / contains "data available" → failure
+         (matches the error-string convention used by all 5 data tools)
+      3. Try ``model_cls.model_validate_json``; on ValidationError → failure
+      4. Otherwise → success, return parsed model
+
+    Returns ``(model, None)`` on success or ``(None, error_msg)`` on failure.
+    """
+    raw = raw.strip() if raw else ""
+    if not raw:
+        return None, error_msg
+    # Error-string convention: tools return "Error fetching X: ..." or "No X data..."
+    lowered = raw.lower()
+    if (
+        raw.startswith("Error")
+        or raw.startswith("No ")
+        or "data available" in lowered
+    ):
+        return None, error_msg
+    try:
+        return model_cls.model_validate_json(raw), None
+    except Exception:
+        return None, error_msg
 
 
 def _populate_competitor(state: "AnalysisState", data: dict[str, Any]) -> None:
@@ -388,13 +471,15 @@ class AnalysisFlow(Flow[AnalysisState]):
         ticker: str | None = None,
         crewai_trigger_payload: dict[str, Any] | None = None,
     ) -> None:
-        """Step 1: Pre-fetch raw data via DataSourceRegistry, then drive the
-        8-agent AnalysisCrew to produce analysis results. Sub-project 1
-        keeps the crew as a structural shell; sub-project 3+ will let
-        agents do real reasoning.
-        """
-        from alphaquant.models.company import Company
+        """Step 1: Drive the 8-agent Crew to produce analysis results.
 
+        Sub-project 2: the Flow no longer pre-fetches data. Each of the 4
+        data agents (CompanyResolver, MarketAnalyst, NewsAnalyst,
+        FinancialAnalyst) calls its own tool inside the Crew to fetch
+        fresh data. We only pass the ticker to ``crew.kickoff``; the
+        resulting task outputs are parsed back into ``state`` by
+        ``parse_crew_output``.
+        """
         # Resolve ticker from any of the supported channels.
         raw_ticker = (
             ticker
@@ -406,65 +491,16 @@ class AnalysisFlow(Flow[AnalysisState]):
         self.state.ticker = normalized
         log.info("flow_step_started", step="run_crew", ticker=normalized)
 
-        # Pre-fetch all 4 raw data sources. The crew gets these as inputs.
-        registry = DataSourceRegistry()
-        try:
-            company, market, news, financial = await asyncio.wait_for(
-                asyncio.gather(
-                    registry.get_company(normalized),
-                    registry.get_market(normalized),
-                    registry.get_news(normalized),
-                    registry.get_financial(normalized),
-                    return_exceptions=True,
-                ),
-                timeout=45.0,
-            )
-        except asyncio.TimeoutError:
-            log.error("data_fetch_timeout", ticker=normalized)
-            raise
-
-        # Map exceptions → None (degraded mode).
-        self.state.company = company if isinstance(company, Company) else None
-        self.state.market = market if isinstance(market, MarketData) else None
-        if isinstance(news, NewsAnalysis):
-            self.state.news = news
-        elif isinstance(news, list):
-            self.state.news = _news_items_to_analysis(news, normalized)
-        else:
-            self.state.news = NewsAnalysis.empty(normalized)
-        self.state.financial = (
-            financial
-            if isinstance(financial, FinancialStatements)
-            else FinancialStatements(ticker=normalized)
-        )
-
-        if self.state.company is None:
-            self.state.errors.append("company_data_unavailable")
-        if self.state.market is None:
-            self.state.errors.append("market_data_unavailable")
-        if self.state.news.total_count == 0:
-            self.state.errors.append("news_data_unavailable")
-        if not isinstance(financial, FinancialStatements):
-            self.state.errors.append("financial_data_unavailable")
-
-        if self.state.company is None:
-            raise AllDataSourcesDown(
-                f"Cannot resolve {normalized}: company data unavailable"
-            )
-
-        # Drive the 8-agent crew. Crew.kickoff is sync → wrap in to_thread.
+        # Drive the 8-agent crew. The 4 data tasks (company_resolver,
+        # market_analyst, news_analyst, financial_analyst) run in parallel
+        # with async_execution=True; each calls its own tool to fetch
+        # fresh data. Crew.kickoff is sync → wrap in to_thread.
         crew = AnalysisCrew()
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(
                     crew.kickoff,
-                    inputs={
-                        "ticker": normalized,
-                        "company": self.state.company.model_dump(mode="json") if self.state.company else None,
-                        "market": self.state.market.model_dump(mode="json") if self.state.market else None,
-                        "news": self.state.news.model_dump(mode="json") if self.state.news else None,
-                        "financial": self.state.financial.model_dump(mode="json") if self.state.financial else None,
-                    },
+                    inputs={"ticker": normalized},
                 ),
                 timeout=FLOW_TIMEOUT_SECONDS,
             )
@@ -473,6 +509,7 @@ class AnalysisFlow(Flow[AnalysisState]):
             raise
 
         # Parse crew output → fill self.state fields downstream tasks consume.
+        # Raises AllDataSourcesDown if company fetch failed.
         parse_crew_output(result, self.state)
 
         log.info("flow_step_completed", step="run_crew", ticker=normalized)

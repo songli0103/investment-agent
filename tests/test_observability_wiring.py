@@ -250,7 +250,11 @@ def test_run_analysis_async_emits_no_report_event(captured_logs):
 
 
 def test_flow_emits_step_started_and_completed(captured_logs):
-    """Running the run_crew step emits started + completed events."""
+    """Running the run_crew step emits started + completed events.
+
+    Sub-project 2: tools (not registry) are mocked. The 4 tool _run methods
+    return valid JSON that parse_crew_output consumes from crew tasks_output.
+    """
     from alphaquant.flows.analysis_flow import AnalysisFlow
     from alphaquant.models.company import Company
     from alphaquant.models.market import MarketData
@@ -280,29 +284,49 @@ def test_flow_emits_step_started_and_completed(captured_logs):
     fake_financial = FinancialStatements(ticker="AAPL")
     fake_news = NewsAnalysis.empty("AAPL")
 
-    async def _get_company(_t):
-        return fake_company
+    company_json = fake_company.model_dump_json()
+    market_json = fake_market.model_dump_json()
+    financial_json = fake_financial.model_dump_json()
+    news_json = "[]"
 
-    async def _get_market(_t):
-        return fake_market
-
-    async def _get_news(_t):
-        return fake_news
-
-    async def _get_financial(_t):
-        return fake_financial
-
-    fake_registry = type("R", (), {})()
-    fake_registry.get_company = _get_company
-    fake_registry.get_market = _get_market
-    fake_registry.get_news = _get_news
-    fake_registry.get_financial = _get_financial
+    def _make_crew_output():
+        # Build a fake CrewOutput whose tasks_output contains 4 task results.
+        # parse_crew_output consumes them by index via _TASK_KEYWORDS.
+        return type("O", (), {
+            "tasks_output": [
+                type("T", (), {"raw": company_json})(),
+                type("T", (), {"raw": market_json})(),
+                type("T", (), {"raw": news_json})(),
+                type("T", (), {"raw": financial_json})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+            ]
+        })()
 
     fake_crew = type("C", (), {})()
-    fake_crew.kickoff = lambda inputs: type("O", (), {"tasks_output": []})()
+    fake_crew.kickoff = lambda inputs: _make_crew_output()
 
-    with patch("alphaquant.flows.analysis_flow.DataSourceRegistry", return_value=fake_registry), \
-         patch("alphaquant.flows.analysis_flow.AnalysisCrew", return_value=fake_crew):
+    with patch(
+        "alphaquant.tools.company_lookup_tool.CompanyLookupTool._run",
+        new=lambda self, ticker: company_json,
+    ), patch(
+        "alphaquant.tools.market_data_tool.MarketDataTool._run",
+        new=lambda self, ticker: market_json,
+    ), patch(
+        "alphaquant.tools.news_tool.NewsTool._run",
+        new=lambda self, ticker: news_json,
+    ), patch(
+        "alphaquant.tools.financial_tool.FinancialTool._run",
+        new=lambda self, ticker: financial_json,
+    ), patch(
+        "alphaquant.tools.competitor_tool.CompetitorTool._run",
+        new=lambda self, ticker: "No peer data available",
+    ), patch(
+        "alphaquant.flows.analysis_flow.AnalysisCrew",
+        return_value=fake_crew,
+    ):
         asyncio.run(flow.run_crew("AAPL"))
 
     events = [r["event"] for r in captured_logs]
@@ -320,12 +344,14 @@ def test_flow_emits_step_started_and_completed(captured_logs):
 
 
 def test_flow_run_crew_logs_started_completed(captured_logs):
-    """run_crew emits started, then completed on success."""
+    """run_crew emits started, then completed on success.
+
+    Sub-project 2: tools (not registry) are mocked.
+    """
     from alphaquant.flows.analysis_flow import AnalysisFlow
     from alphaquant.models.company import Company
     from alphaquant.models.market import MarketData
     from alphaquant.models.financial import FinancialStatements
-    from alphaquant.models.news import NewsAnalysis
 
     fake_company = Company(
         ticker="AAPL",
@@ -345,34 +371,51 @@ def test_flow_run_crew_logs_started_completed(captured_logs):
         source="yahoo",
     )
     fake_financial = FinancialStatements(ticker="AAPL")
-    fake_news = NewsAnalysis.empty("AAPL")
 
-    async def _get_company(_t):
-        return fake_company
+    company_json = fake_company.model_dump_json()
+    market_json = fake_market.model_dump_json()
+    financial_json = fake_financial.model_dump_json()
+    news_json = "[]"
 
-    async def _get_market(_t):
-        return fake_market
-
-    async def _get_news(_t):
-        return fake_news
-
-    async def _get_financial(_t):
-        return fake_financial
-
-    fake_registry = type("R", (), {})()
-    fake_registry.get_company = _get_company
-    fake_registry.get_market = _get_market
-    fake_registry.get_news = _get_news
-    fake_registry.get_financial = _get_financial
+    def _make_crew_output():
+        return type("O", (), {
+            "tasks_output": [
+                type("T", (), {"raw": company_json})(),
+                type("T", (), {"raw": market_json})(),
+                type("T", (), {"raw": news_json})(),
+                type("T", (), {"raw": financial_json})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+            ]
+        })()
 
     fake_crew = type("C", (), {})()
-    fake_crew.kickoff = lambda inputs: type("O", (), {"tasks_output": []})()
+    fake_crew.kickoff = lambda inputs: _make_crew_output()
 
     flow = AnalysisFlow()
     flow.state.ticker = "AAPL"
 
-    with patch("alphaquant.flows.analysis_flow.DataSourceRegistry", return_value=fake_registry), \
-         patch("alphaquant.flows.analysis_flow.AnalysisCrew", return_value=fake_crew):
+    with patch(
+        "alphaquant.tools.company_lookup_tool.CompanyLookupTool._run",
+        new=lambda self, ticker: company_json,
+    ), patch(
+        "alphaquant.tools.market_data_tool.MarketDataTool._run",
+        new=lambda self, ticker: market_json,
+    ), patch(
+        "alphaquant.tools.news_tool.NewsTool._run",
+        new=lambda self, ticker: news_json,
+    ), patch(
+        "alphaquant.tools.financial_tool.FinancialTool._run",
+        new=lambda self, ticker: financial_json,
+    ), patch(
+        "alphaquant.tools.competitor_tool.CompetitorTool._run",
+        new=lambda self, ticker: "No peer data available",
+    ), patch(
+        "alphaquant.flows.analysis_flow.AnalysisCrew",
+        return_value=fake_crew,
+    ):
         asyncio.run(flow.run_crew("AAPL"))
 
     events = [r["event"] for r in captured_logs]
@@ -386,7 +429,11 @@ def test_flow_run_crew_logs_started_completed(captured_logs):
 
 
 def test_flow_run_crew_logs_failure(captured_logs):
-    """run_crew propagates AllDataSourcesDown when the company source is exhausted."""
+    """run_crew propagates AllDataSourcesDown when the company tool fails.
+
+    Sub-project 2: the company tool returns an error string; parse_crew_output
+    raises AllDataSourcesDown.
+    """
     from alphaquant.exceptions import AllDataSourcesDown
     from alphaquant.flows.analysis_flow import AnalysisFlow
     from alphaquant.models.financial import FinancialStatements
@@ -394,30 +441,50 @@ def test_flow_run_crew_logs_failure(captured_logs):
     flow = AnalysisFlow()
     flow.state.ticker = "AAPL"
 
-    fake_registry = type("R", (), {})()
+    company_error = "Error fetching company: all sources down"
+    fake_financial = FinancialStatements(ticker="AAPL")
+    market_json = (
+        '{"ticker":"AAPL","as_of":"2026-06-20","price":150.0,'
+        '"change_pct":0.5,"volume":0,"market_cap":3000000000000}'
+    )
+    financial_json = fake_financial.model_dump_json()
 
-    async def _raise(_t):
-        raise AllDataSourcesDown("nope")
-
-    async def _empty(_t):
-        return None
-
-    async def _empty_list(_t):
-        return []
-
-    async def _empty_fs(_t):
-        return FinancialStatements(ticker="AAPL")
-
-    fake_registry.get_company = _raise
-    fake_registry.get_market = _empty
-    fake_registry.get_news = _empty_list
-    fake_registry.get_financial = _empty_fs
+    def _make_crew_output():
+        return type("O", (), {
+            "tasks_output": [
+                type("T", (), {"raw": company_error})(),
+                type("T", (), {"raw": market_json})(),
+                type("T", (), {"raw": "[]"})(),
+                type("T", (), {"raw": financial_json})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+                type("T", (), {"raw": ""})(),
+            ]
+        })()
 
     fake_crew = type("C", (), {})()
-    fake_crew.kickoff = lambda inputs: type("O", (), {"tasks_output": []})()
+    fake_crew.kickoff = lambda inputs: _make_crew_output()
 
-    with patch("alphaquant.flows.analysis_flow.DataSourceRegistry", return_value=fake_registry), \
-         patch("alphaquant.flows.analysis_flow.AnalysisCrew", return_value=fake_crew):
+    with patch(
+        "alphaquant.tools.company_lookup_tool.CompanyLookupTool._run",
+        new=lambda self, ticker: company_error,
+    ), patch(
+        "alphaquant.tools.market_data_tool.MarketDataTool._run",
+        new=lambda self, ticker: market_json,
+    ), patch(
+        "alphaquant.tools.news_tool.NewsTool._run",
+        new=lambda self, ticker: "[]",
+    ), patch(
+        "alphaquant.tools.financial_tool.FinancialTool._run",
+        new=lambda self, ticker: financial_json,
+    ), patch(
+        "alphaquant.tools.competitor_tool.CompetitorTool._run",
+        new=lambda self, ticker: "No peer data available",
+    ), patch(
+        "alphaquant.flows.analysis_flow.AnalysisCrew",
+        return_value=fake_crew,
+    ):
         with pytest.raises(AllDataSourcesDown):
             asyncio.run(flow.run_crew("AAPL"))
 
