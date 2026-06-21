@@ -3,17 +3,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
-from alphaquant.models.competitor import Competitor
 from alphaquant.models.financial import (
     BalanceSheet,
     CashFlowStatement,
     FinancialStatements,
     IncomeStatement,
 )
-from alphaquant.models.risk import RiskScore
-from alphaquant.scoring import competitive, dcf, financial_health, risk_score
+from alphaquant.scoring import dcf, financial_health
 
 
 # ---------------------------------------------------------------------------
@@ -233,173 +229,6 @@ class TestFinancialHealth:
 
 
 # ---------------------------------------------------------------------------
-# Risk Score
-# ---------------------------------------------------------------------------
-
-class TestRiskScore:
-    def test_empty_subscores_returns_50(self):
-        assert risk_score.compute([]) == 50
-
-    def test_zero_subscores_returns_zero(self):
-        subs = [
-            RiskScore(category="financial", score=0, rationale="very low risk here"),
-            RiskScore(category="operational", score=0, rationale="very low risk here"),
-        ]
-        assert risk_score.compute(subs) == 0
-
-    def test_max_subscores(self):
-        subs = [
-            RiskScore(category="financial", score=10, rationale="max score category 1"),
-            RiskScore(category="operational", score=10, rationale="max score category 2"),
-        ]
-        # 10*10*0.30 + 10*10*0.15 = 30 + 15 = 45
-        assert risk_score.compute(subs) == 45
-
-    def test_known_weights_sum(self):
-        # Just verify known categories sum correctly.
-        # financial only: 10*10*0.30 = 30
-        subs = [
-            RiskScore(category="financial", score=10, rationale="financial risk text"),
-        ]
-        assert risk_score.compute(subs) == 30
-
-    def test_caps_at_100(self):
-        # Construct a set that would exceed 100 if not capped
-        subs = [
-            RiskScore(category="financial", score=10, rationale="max text here"),
-            RiskScore(category="operational", score=10, rationale="max text here"),
-            RiskScore(category="market", score=10, rationale="max text here"),
-            RiskScore(category="regulatory", score=10, rationale="max text here"),
-            RiskScore(category="governance", score=10, rationale="max text here"),
-            RiskScore(category="macro", score=10, rationale="max text here"),
-        ]
-        # 10*10*(0.30+0.15+0.15+0.15+0.10+0.15) = 100*1.0 = 100
-        assert risk_score.compute(subs) == 100
-
-    def test_determine_level_low(self):
-        assert risk_score.determine_level(0) == "low"
-        assert risk_score.determine_level(25) == "low"
-
-    def test_determine_level_medium(self):
-        assert risk_score.determine_level(26) == "medium"
-        assert risk_score.determine_level(50) == "medium"
-
-    def test_determine_level_high(self):
-        assert risk_score.determine_level(51) == "high"
-        assert risk_score.determine_level(75) == "high"
-
-    def test_determine_level_extreme(self):
-        assert risk_score.determine_level(76) == "extreme"
-        assert risk_score.determine_level(100) == "extreme"
-
-
-# ---------------------------------------------------------------------------
-# Competitive
-# ---------------------------------------------------------------------------
-
-def make_competitor(
-    ticker: str,
-    market_cap: int,
-    revenue_growth_yoy: float | None = None,
-    gross_margin: float | None = None,
-    net_margin: float | None = None,
-) -> Competitor:
-    return Competitor(
-        ticker=ticker,
-        name=ticker + " Inc.",
-        market_cap=market_cap,
-        revenue_ttm=Decimal("100"),
-        revenue_growth_yoy=revenue_growth_yoy,
-        gross_margin=gross_margin,
-        net_margin=net_margin,
-    )
-
-
-class TestCompetitive:
-    def test_no_peers_returns_50(self):
-        assert competitive.compute(
-            target_metrics={"market_cap": 1000.0},
-            peers=[],
-        ) == 50
-
-    def test_all_dimensions_missing_returns_50(self):
-        peers = [make_competitor("AAA", 1000)]
-        assert competitive.compute(
-            target_metrics={}, peers=peers,
-        ) == 50
-
-    def test_top_quartile_market_cap(self):
-        # Peers: 100, 200, 300, 400. Target 500 → 100th percentile (4/4 below)
-        peers = [
-            make_competitor("A", 100),
-            make_competitor("B", 200),
-            make_competitor("C", 300),
-            make_competitor("D", 400),
-        ]
-        score = competitive.compute(
-            target_metrics={"market_cap": 500.0}, peers=peers,
-        )
-        assert score == 100
-
-    def test_bottom_quartile_market_cap(self):
-        # Peers: 100, 200, 300, 400. Target 50 → 0th percentile
-        peers = [
-            make_competitor("A", 100),
-            make_competitor("B", 200),
-            make_competitor("C", 300),
-            make_competitor("D", 400),
-        ]
-        score = competitive.compute(
-            target_metrics={"market_cap": 50.0}, peers=peers,
-        )
-        assert score == 0
-
-    def test_middle_percentile(self):
-        # Peers: 100, 300, 400. Target 200 → 1/3 below = 33.33%
-        peers = [
-            make_competitor("A", 100),
-            make_competitor("B", 300),
-            make_competitor("C", 400),
-        ]
-        score = competitive.compute(
-            target_metrics={"market_cap": 200.0}, peers=peers,
-        )
-        assert score == 33
-
-    def test_avg_of_multiple_dimensions(self):
-        # Peers: market_cap values, gross_margin values
-        peers = [
-            make_competitor("A", 100, gross_margin=10.0),
-            make_competitor("B", 200, gross_margin=20.0),
-            make_competitor("C", 300, gross_margin=30.0),
-        ]
-        # market_cap 250: below = [100, 200] = 2/3 → 66.67
-        # gross_margin 25: below = [10, 20] = 2/3 → 66.67
-        # mean = 66.67 → 67
-        score = competitive.compute(
-            target_metrics={"market_cap": 250.0, "gross_margin": 25.0},
-            peers=peers,
-        )
-        assert score == 67
-
-    def test_skips_missing_dimensions(self):
-        # Peers missing net_margin; target also missing it → skip that dimension
-        peers = [
-            make_competitor("A", 100, gross_margin=10.0),
-            make_competitor("B", 200, gross_margin=20.0),
-            make_competitor("C", 300, gross_margin=30.0),
-        ]
-        # Only market_cap and gross_margin populated. Target on market_cap=250
-        # gives 66.67. gross_margin=25 → 66.67. net_margin not in target → skip.
-        # mean = 66.67 → 67
-        score = competitive.compute(
-            target_metrics={"market_cap": 250.0, "gross_margin": 25.0, "net_margin": None},
-            peers=peers,
-        )
-        assert score == 67
-
-
-# ---------------------------------------------------------------------------
 # DCF Valuation
 # ---------------------------------------------------------------------------
 
@@ -501,8 +330,6 @@ class TestComputeDcfValue:
 # ---------------------------------------------------------------------------
 
 def test_package_exports():
-    from alphaquant.scoring import competitive, dcf, financial_health, risk_score
-    assert competitive is not None
+    from alphaquant.scoring import dcf, financial_health
     assert dcf is not None
     assert financial_health is not None
-    assert risk_score is not None

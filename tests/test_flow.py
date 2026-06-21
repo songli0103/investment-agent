@@ -72,6 +72,125 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def _build_fake_task_output(
+    sample_company,
+    sample_market,
+    sample_financial,
+    sample_competitor_analysis,
+    *,
+    market_json: str | None = None,
+    news_json: str = "[]",
+    financial_json: str | None = None,
+    market_error: str | None = None,
+    include_analysis_outputs: bool = True,
+) -> list:
+    """Build a fake tasks_output list for AnalysisCrew.kickoff mocks.
+
+    Sub-project 3: tasks 0-3 produce JSON raw text (still parsed by the data
+    pipeline), tasks 4-7 produce Pydantic instances via task_out.pydantic
+    (parsed by _extract_pydantic_field).
+    """
+    from alphaquant.models.risk import RiskAssessment
+    from alphaquant.models.valuation import ValuationResult
+    from alphaquant.models.report import InvestmentReport
+
+    company_json = sample_company.model_dump_json()
+    if market_json is None:
+        if market_error is not None:
+            market_raw = market_error
+        else:
+            market_raw = sample_market.model_dump_json()
+    else:
+        market_raw = market_json
+    if financial_json is None:
+        financial_raw = sample_financial.model_dump_json()
+    else:
+        financial_raw = financial_json
+
+    risk = RiskAssessment(
+        ticker="AAPL",
+        total_score=40,
+        level="medium",
+        sub_scores=[
+            RiskScore(
+                category="financial",
+                score=4,
+                rationale="placeholder subscore rationale",
+                evidence=[],
+            )
+        ],
+        top_risks=[],
+    )
+    valuation = ValuationResult(
+        ticker="AAPL",
+        intrinsic_value_per_share=Decimal("180.00"),
+        current_price=Decimal("150.00"),
+        upside_pct=0.2,
+        dcf_value=None,
+        relative_value=Decimal("180.00"),
+        method="relative_only",
+    )
+    # Need a MarketData for the InvestmentReport; use sample_market if present
+    # else substitute a degraded one.
+    report = InvestmentReport(
+        report_id="11111111-1111-1111-1111-111111111111",
+        ticker="AAPL",
+        generated_at=datetime(2026, 1, 1),
+        data_as_of={},
+        company=sample_company,
+        market=sample_market if market_error is None else _make_degraded_market(sample_company),
+        financial=sample_financial,
+        financial_health_score=70,
+        news=NewsAnalysis.empty("AAPL"),
+        competitors=sample_competitor_analysis,
+        risk=risk,
+        valuation=valuation,
+        rating="Hold",
+        confidence=70,
+        investment_horizon="medium",
+        catalysts=["placeholder catalyst"],
+        markdown="## placeholder markdown",
+        sources=[],
+        disclaimer="placeholder",
+    )
+
+    outputs = [
+        MagicMock(raw=company_json, pydantic=None),
+        MagicMock(raw=market_raw, pydantic=None),
+        MagicMock(raw=news_json, pydantic=None),
+        MagicMock(raw=financial_raw, pydantic=None),
+    ]
+    if include_analysis_outputs:
+        outputs.extend(
+            [
+                MagicMock(raw="", pydantic=sample_competitor_analysis),
+                MagicMock(raw="", pydantic=risk),
+                MagicMock(raw="", pydantic=valuation),
+                MagicMock(raw="", pydantic=report),
+            ]
+        )
+    else:
+        outputs.extend(
+            [MagicMock(raw="", pydantic=None) for _ in range(4)]
+        )
+    return outputs
+
+
+def _make_degraded_market(sample_company):
+    """Build a degraded MarketData placeholder for partial-failure tests."""
+    from alphaquant.models.market import MarketData
+
+    return MarketData(
+        ticker="AAPL",
+        as_of=datetime(2026, 1, 1),
+        price=Decimal("0"),
+        change_pct=0.0,
+        volume=0,
+        market_cap=sample_company.market_cap,
+        source="degraded",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -231,13 +350,15 @@ class TestSynthesizeReport:
         sample_financial,
         sample_competitor_analysis,
     ):
+        from alphaquant.models.report import InvestmentReport
+
         flow.state.ticker = "AAPL"
         flow.state.company = sample_company
         flow.state.market = sample_market
         flow.state.news = sample_news
         flow.state.financial = sample_financial
         flow.state.competitor = sample_competitor_analysis
-        flow.state.risk = RiskAssessment(
+        risk = RiskAssessment(
             ticker="AAPL",
             total_score=40,
             level="medium",
@@ -251,7 +372,7 @@ class TestSynthesizeReport:
             ],
             top_risks=[],
         )
-        flow.state.valuation = ValuationResult(
+        valuation = ValuationResult(
             ticker="AAPL",
             intrinsic_value_per_share=Decimal("180.00"),
             current_price=Decimal("150.00"),
@@ -260,8 +381,34 @@ class TestSynthesizeReport:
             relative_value=Decimal("180.00"),
             method="relative_only",
         )
+        flow.state.risk = risk
+        flow.state.valuation = valuation
+        # Report is now populated by the ReportWriter agent (sub-3 contract);
+        # synthesize_report only fills runtime fields. Pre-populate it here so
+        # we can exercise the synthesize_report contract.
+        flow.state.report = InvestmentReport(
+            report_id="11111111-1111-1111-1111-111111111111",
+            ticker="AAPL",
+            generated_at=datetime(2026, 1, 1),
+            data_as_of={},
+            company=sample_company,
+            market=sample_market,
+            financial=sample_financial,
+            financial_health_score=70,
+            news=sample_news,
+            competitors=sample_competitor_analysis,
+            risk=risk,
+            valuation=valuation,
+            rating="Hold",
+            confidence=70,
+            investment_horizon="medium",
+            catalysts=["placeholder catalyst"],
+            markdown="## placeholder markdown",
+            sources=[],
+            disclaimer="placeholder",
+        )
 
-    def test_produces_investment_report(
+    def test_fills_runtime_fields(
         self,
         sample_company,
         sample_market,
@@ -269,6 +416,9 @@ class TestSynthesizeReport:
         sample_financial,
         sample_competitor_analysis,
     ):
+        """Sub-project 3: synthesize_report only fills sources, disclaimer, generated_at."""
+        from alphaquant.flows.analysis_flow import DISCLAIMER_TEXT
+
         flow = AnalysisFlow()
         self._populate_state(
             flow,
@@ -278,77 +428,38 @@ class TestSynthesizeReport:
             sample_financial,
             sample_competitor_analysis,
         )
+
+        # Capture generated_at before, so we can verify it changed
+        before = flow.state.report.generated_at
 
         _run(flow.synthesize_report())
 
         assert flow.state.report is not None
         assert flow.state.report.ticker == "AAPL"
-        assert flow.state.report.company == sample_company
-        assert flow.state.report.market == sample_market
-        assert flow.state.report.rating in (
-            "Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"
-        )
-        assert 0 <= flow.state.report.confidence <= 100
-        assert isinstance(flow.state.report.markdown, str)
-        assert len(flow.state.report.markdown) > 0
-        # UUID4 string
-        assert len(flow.state.report.report_id) == 36
+        # Sub-3: rating / confidence / catalysts / markdown come from the
+        # ReportWriter agent, NOT from synthesize_report. Verify they were
+        # preserved unchanged.
+        assert flow.state.report.rating == "Hold"
+        assert flow.state.report.confidence == 70
+        assert flow.state.report.catalysts == ["placeholder catalyst"]
+        assert flow.state.report.markdown == "## placeholder markdown"
+        # Runtime fields:
+        assert flow.state.report.disclaimer == DISCLAIMER_TEXT
+        assert isinstance(flow.state.report.sources, list)
+        # generated_at was rewritten by synthesize_report
+        assert flow.state.report.generated_at >= before
 
-    def test_markdown_contains_sections(
+    def test_missing_report_raises_report_generation_error(
         self,
-        sample_company,
-        sample_market,
-        sample_news,
-        sample_financial,
-        sample_competitor_analysis,
     ):
-        flow = AnalysisFlow()
-        self._populate_state(
-            flow,
-            sample_company,
-            sample_market,
-            sample_news,
-            sample_financial,
-            sample_competitor_analysis,
-        )
-
-        _run(flow.synthesize_report())
-
-        md = flow.state.report.markdown
-        for section in (
-            "# AAPL", "执行摘要", "公司概览", "市场分析",
-            "财务分析", "新闻情绪", "竞争对手", "风险评估", "估值与建议",
-        ):
-            assert section in md
-
-    def test_synthesis_failure_raises_report_generation_error(
-        self,
-        sample_company,
-        sample_market,
-        sample_news,
-        sample_financial,
-        sample_competitor_analysis,
-    ):
-        """§3.2: report synthesis failure → ReportGenerationError (→ 500)."""
+        """§3.2: when ReportWriter failed (state.report is None), raise ReportGenerationError."""
         from alphaquant.exceptions import ReportGenerationError
 
         flow = AnalysisFlow()
-        self._populate_state(
-            flow,
-            sample_company,
-            sample_market,
-            sample_news,
-            sample_financial,
-            sample_competitor_analysis,
-        )
-
-        # Force InvestmentReport(...) construction to raise
-        with patch(
-            "alphaquant.flows.analysis_flow.InvestmentReport",
-            side_effect=RuntimeError("boom"),
-        ):
-            with pytest.raises(ReportGenerationError):
-                _run(flow.synthesize_report())
+        flow.state.ticker = "AAPL"
+        # state.report left as None
+        with pytest.raises(ReportGenerationError):
+            _run(flow.synthesize_report())
 
 
 # ---------------------------------------------------------------------------
@@ -363,11 +474,15 @@ class TestFlowKickoff:
         sample_market,
         sample_news,
         sample_financial,
+        sample_competitor_analysis,
     ):
         """All 2 steps execute and produce an InvestmentReport.
 
         Sub-project 2: tools (not registry) are mocked at the tool layer
         to mirror the Crew-internal fetch path.
+
+        Sub-project 3: tasks 4-7 (competitor / risk / valuation / report)
+        are populated as Pydantic instances on task_out.pydantic.
         """
         flow = AnalysisFlow()
 
@@ -382,21 +497,13 @@ class TestFlowKickoff:
             for p in tool_patches:
                 stack.enter_context(p)
 
-            company_json = sample_company.model_dump_json()
-            market_json = sample_market.model_dump_json()
-            news_json = "[]"
-            financial_json = sample_financial.model_dump_json()
             fake_result = MagicMock()
-            fake_result.tasks_output = [
-                MagicMock(raw=company_json),
-                MagicMock(raw=market_json),
-                MagicMock(raw=news_json),
-                MagicMock(raw=financial_json),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-            ]
+            fake_result.tasks_output = _build_fake_task_output(
+                sample_company,
+                sample_market,
+                sample_financial,
+                sample_competitor_analysis,
+            )
             MockCrew.return_value.kickoff.return_value = fake_result
 
             _run(flow.run_crew("AAPL"))
@@ -410,6 +517,7 @@ class TestFlowKickoff:
         sample_company,
         sample_market,
         sample_financial,
+        sample_competitor_analysis,
     ):
         """§3.2: market tool returns error → flow still produces a report."""
         flow = AnalysisFlow()
@@ -435,16 +543,13 @@ class TestFlowKickoff:
              patch("alphaquant.flows.analysis_flow.AnalysisCrew") as MockCrew:
 
             fake_result = MagicMock()
-            fake_result.tasks_output = [
-                MagicMock(raw=company_json),
-                MagicMock(raw=market_error),
-                MagicMock(raw=news_json),
-                MagicMock(raw=financial_json),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-            ]
+            fake_result.tasks_output = _build_fake_task_output(
+                sample_company,
+                sample_market,
+                sample_financial,
+                sample_competitor_analysis,
+                market_error=market_error,
+            )
             MockCrew.return_value.kickoff.return_value = fake_result
 
             _run(flow.run_crew("AAPL"))
@@ -461,10 +566,13 @@ class TestFlowKickoff:
         sample_company,
         sample_market,
         sample_financial,
+        sample_competitor_analysis,
     ):
         """§3.4: kickoff_with_timeout returns within 180s for a fast flow.
 
         Sub-project 2: tool _run methods are mocked instead of registry.
+
+        Sub-project 3: include Pydantic instances in tasks_output 4-7.
         """
         flow = AnalysisFlow()
 
@@ -489,16 +597,12 @@ class TestFlowKickoff:
              patch("alphaquant.flows.analysis_flow.AnalysisCrew") as MockCrew:
 
             fake_result = MagicMock()
-            fake_result.tasks_output = [
-                MagicMock(raw=company_json),
-                MagicMock(raw=market_json),
-                MagicMock(raw=news_json),
-                MagicMock(raw=financial_json),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-                MagicMock(raw=""),
-            ]
+            fake_result.tasks_output = _build_fake_task_output(
+                sample_company,
+                sample_market,
+                sample_financial,
+                sample_competitor_analysis,
+            )
             MockCrew.return_value.kickoff.return_value = fake_result
 
             _run(flow.kickoff_with_timeout(inputs={"ticker": "AAPL"}))
