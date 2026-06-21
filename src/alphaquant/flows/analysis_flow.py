@@ -51,11 +51,9 @@ DISCLAIMER_TEXT = (
     "投资有风险，决策需谨慎。"
 )
 
-# §3.4: whole-Flow timeout. Sub-project 3 widens 180→600s to absorb
-# 4 parallel data fetches (~30s each) + 3 parallel LLM analysis tasks
-# (~60-90s) + 1 ReportWriter task (~30-60s) + manager overhead. Total
-# expected ~120-180s; 600s leaves 3-4x headroom.
-FLOW_TIMEOUT_SECONDS = 600.0
+# §3.4: whole-Flow timeout. Sub-project 2 widens 120→180s to absorb
+# 4 parallel data fetches (~30s each) + manager LLM decisions (~2s each).
+FLOW_TIMEOUT_SECONDS = 180.0
 
 
 # Maps crew task descriptions to AnalysisState field keys. The order MUST
@@ -407,13 +405,12 @@ class AnalysisFlow(Flow[AnalysisState]):
         )
 
     async def kickoff_with_timeout(self, inputs: dict[str, Any] | None = None) -> Any:
-        """§3.4 whole-Flow 600s timeout wrapper.
+        """§3.4 whole-Flow 120s timeout wrapper.
 
         CrewAI Flow's ``kickoff`` is sync; ``kickoff_async`` returns a coroutine
         that we can wrap in ``asyncio.wait_for``. On timeout the underlying
         coroutine is cancelled and ``asyncio.TimeoutError`` propagates to the
         caller, which (per spec §5.2) maps to HTTP 504 GATEWAY_TIMEOUT.
-        Sub-project 3: widened 120→180→600 to absorb real LLM latency.
         """
         try:
             return await asyncio.wait_for(
