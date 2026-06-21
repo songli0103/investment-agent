@@ -4,7 +4,9 @@
 
 **Goal:** Make 4 analysis agents (CompetitorAnalyst, RiskAnalyst, ValuationAnalyst, ReportWriter) produce real LLM reasoning output via `Task(output_pydantic=...)`; remove all deterministic Flow-side fallbacks; ReportWriter agent decides all `InvestmentReport` fields (rating, confidence, catalysts, investment_horizon, markdown). Also fix the 3 deferred blockers from sub-2 (asyncio shutdown race, FLOW_TIMEOUT_SECONDS too short, tool empty-shell fallback).
 
-**Architecture:** Extend `_TASK_TEMPLATES` with `output_pydantic` model column; expand `_ASYNC_TASK_INDICES` to cover data + analysis tasks (0-6); `ReportWriter` (idx 7) runs sequentially with `context=[tasks[4..6]]`; `parse_crew_output` introduces `_extract_pydantic_field` helper that pulls the Pydantic instance from `task_out.pydantic` (with raw-JSON fallback for older CrewAI versions); `_populate_competitor` / `_populate_risk` / `_populate_valuation` / `_default_risk_subscores` deleted; `synthesize_report` becomes a thin runtime-field-fill step. Blocker 1 fix: wrap `crew.kickoff(inputs=...)` in `_kickoff_sync()` + `asyncio.to_thread()` so `asyncio.wait_for` can cancel mid-execution. Blocker 2: `FLOW_TIMEOUT_SECONDS` 180 → 600. Blocker 3: drop `except Exception` empty-shell fallback in 4 data tools — they return error string instead. Test strategy: mock tools + `_FakeLLM` for unit tests; smoke real LLM for end-to-end validation.
+**Architecture:** Extend `_TASK_TEMPLATES` with `output_pydantic` model column; expand `_ASYNC_TASK_INDICES` to cover data + analysis tasks (0-6); `ReportWriter` (idx 7) runs sequentially with `context=[tasks[4..6]]`; `parse_crew_output` introduces `_extract_pydantic_field` helper that pulls the Pydantic instance from `task_out.pydantic` only (NO raw-JSON fallback per spec §"完全删除 fallback"); `_populate_competitor` / `_populate_risk` / `_populate_valuation` / `_default_risk_subscores` deleted; `synthesize_report` becomes a thin runtime-field-fill step. Blocker 1 fix: wrap `crew.kickoff(inputs=...)` in `_kickoff_sync()` + `asyncio.to_thread()` so `asyncio.wait_for` can cancel mid-execution. Blocker 2: `FLOW_TIMEOUT_SECONDS` 180 → 600. Blocker 3: drop `except Exception` empty-shell fallback in 4 data tools — they return error string instead. Test strategy: mock tools + `_FakeLLM` for unit tests; smoke real LLM for end-to-end validation.
+
+**Decision recorded 2026-06-21 during pre-flight:** Strict no-fallback. If `task_out.pydantic` is `None` or wrong type, append `"<key>_unavailable"` to `state.errors` and return `None` — never try to recover by parsing `task_out.raw`. If LLM cannot produce schema-valid JSON, that's an LLM problem, not a flow problem.
 
 **Tech Stack:** Python 3.11, CrewAI 0.203.2 (installed), LiteLLM, Pydantic v2, asyncio.
 
@@ -467,7 +469,7 @@ Addresses sub-2 Minor M1 (_ASYNC_TASK_INDICES class constant)."
 - Test: `tests/test_scoring.py`
 
 **Interfaces:**
-- Consumes: `CrewOutput.tasks_output` (each `task_out` may have `.pydantic` attribute set by CrewAI when `output_pydantic=...` is used; fall back to `.raw` JSON for older versions)
+- Consumes: `CrewOutput.tasks_output` (each `task_out` MUST have `.pydantic` attribute set by CrewAI 0.203.2 when `output_pydantic=...` is used)
 - Produces:
   - `_extract_pydantic_field(tasks_output, idx, key, model_cls, state) -> BaseModel | None` — new helper
   - `parse_crew_output(result, state) -> dict[str, Any]` — extended signature (unchanged); body rewritten to use Pydantic extraction for analysis fields
@@ -515,7 +517,7 @@ Expected: FAIL with `ImportError: cannot import name '_extract_pydantic_field'`
 
 #### Step 3: Implement `_extract_pydantic_field` helper
 
-In `src/alphaquant/flows/analysis_flow.py`, after the existing `_safe_parse` helper (around line 322) and before `_extract_data_field` (around line 324), **add** the new helper:
+In `src/alphaquant/flows/analysis_flow.py`, after the existing `_extract_data_field` helper (around line 324), **add** the new helper:
 
 ```python
 def _extract_pydantic_field(
@@ -528,40 +530,27 @@ def _extract_pydantic_field(
     """Extract a Pydantic model from a CrewAI task output.
 
     CrewAI 0.203.2 sets ``task_out.pydantic`` to the validated model instance when
-    the task is configured with ``output_pydantic=...``. We prefer that attribute;
-    fall back to parsing ``task_out.raw`` JSON for older versions or when the
-    Pydantic path failed silently.
+    the task is configured with ``output_pydantic=...``. Per sub-3 decision
+    (完全删除 fallback), we ONLY read that attribute. If it is missing or not
+    the expected model type, append "<key>_unavailable" to state.errors and
+    return None. We do NOT attempt to recover by parsing task_out.raw.
 
-    Returns the model instance, or ``None`` on any failure (and appends
-    ``"<key>_unavailable"`` to ``state.errors``).
+    Returns the model instance, or ``None`` on any failure.
     """
     if idx >= len(tasks_output):
         state.errors.append(f"{key}_unavailable")
         return None
     task_out = tasks_output[idx]
 
-    # Preferred: task_out.pydantic is the model instance
     pyd_obj = getattr(task_out, "pydantic", None)
     if isinstance(pyd_obj, model_cls):
         return pyd_obj
 
-    # Fallback: parse task_out.raw as JSON
-    raw = (getattr(task_out, "raw", "") or "").strip()
-    if not raw or raw.startswith("Error") or raw.startswith("No ") or "data available" in raw.lower():
-        state.errors.append(f"{key}_unavailable")
-        return None
-    try:
-        return model_cls.model_validate_json(raw)
-    except ValidationError:
-        state.errors.append(f"{key}_parse_failed")
-        return None
+    state.errors.append(f"{key}_unavailable")
+    return None
 ```
 
-Add `from pydantic import BaseModel, Field, ValidationError` at the top imports (the `ValidationError` is needed; `BaseModel` and `Field` are already there). The existing import at line 30 is `from pydantic import BaseModel, Field` — change it to:
-
-```python
-from pydantic import BaseModel, Field, ValidationError
-```
+Add `from pydantic import BaseModel, Field` at the top imports (already there at line 30 — verify). No new pydantic imports needed (we deliberately do not catch ValidationError since we don't validate).
 
 #### Step 4: Run test to verify it passes
 
@@ -704,14 +693,11 @@ Expected: FAIL — current `parse_crew_output` calls `_populate_competitor` etc.
 
 #### Step 7: Rewrite `parse_crew_output` body for Pydantic extraction
 
-In `src/alphaquant/flows/analysis_flow.py`, **replace** the body of `parse_crew_output` (lines 257-309, the part after "--- Sub-project 2: parse 4 data fields from agent task outputs ---" and including the lines that call `_populate_competitor` / `_populate_risk` / `_populate_valuation`). The new body uses `_extract_pydantic_field` for the 4 analysis/report fields. Keep the data-field extraction unchanged.
+In `src/alphaquant/flows/analysis_flow.py`, **replace** the body of `parse_crew_output` (the part after the 4 data-field extraction block, including the 3 lines that call `_populate_competitor` / `_populate_risk` / `_populate_valuation`). The new body uses `_extract_pydantic_field` for the 4 analysis/report fields. Keep the data-field extraction unchanged.
 
-Find the block:
+Find the block (lines 305-309, currently calling `_safe_parse`):
 
 ```python
-    # --- Sub-project 2: parse 4 data fields from agent task outputs ---
-    # ... (4 data fields, unchanged) ...
-
     # --- Competitor / Risk / Valuation: deterministic fallback (unchanged from sub-1) ---
     _populate_competitor(state, _safe_parse(raw_by_key.get("competitor_analyst", "")))
     _populate_risk(state, _safe_parse(raw_by_key.get("risk_analyst", "")))
@@ -740,23 +726,24 @@ Replace it with:
     return extracted
 ```
 
-Note: the existing 4-data-field extraction block (lines 260-302) stays unchanged. The only change is the replacement of the last 4 lines (the three `_populate_*` calls) with the 4 `_extract_pydantic_field` calls.
+Note: the existing 4-data-field extraction block stays unchanged. The only change is the replacement of the 3 `_populate_*` calls with the 4 `_extract_pydantic_field` calls.
 
 #### Step 8: Run tests to verify they pass
 
 Run: `uv run pytest tests/test_flow.py -v -k "extracts_competitor_from_pydantic or missing_pydantic_sets_none"`
 Expected: PASS
 
-#### Step 9: Delete the 4 deterministic-fallback functions
+#### Step 9: Delete the 4 deterministic-fallback functions + `_safe_parse` helper
 
-In `src/alphaquant/flows/analysis_flow.py`, **delete** these 4 functions entirely (their definitions, not just the call sites — the call sites were already replaced in Step 7):
+In `src/alphaquant/flows/analysis_flow.py`, **delete** these 5 functions entirely (their definitions, not just the call sites — the call sites were already replaced in Step 7):
 
 1. `_default_risk_subscores` (around lines 195-222) — replaced by LLM-driven RiskAssessment
 2. `_populate_competitor` (around lines 355-387) — replaced by Pydantic extraction
 3. `_populate_risk` (around lines 390-415) — replaced by Pydantic extraction
 4. `_populate_valuation` (around lines 418-463) — replaced by Pydantic extraction
+5. **`_safe_parse` (around line 312)** — per sub-3 "完全删除 fallback" decision, this helper has no remaining callers after Step 7. Delete it.
 
-To find them, search for `def _default_risk_subscores`, `def _populate_competitor`, `def _populate_risk`, `def _populate_valuation` in the file and delete from each `def` to its closing `return` (or end of function). Also remove any helper-only imports they introduced (e.g. `from alphaquant.scoring import competitive, risk_score` at the top).
+To find them, search for `def _default_risk_subscores`, `def _populate_competitor`, `def _populate_risk`, `def _populate_valuation`, `def _safe_parse` in the file and delete from each `def` to its closing `return` (or end of function). Also remove any helper-only imports they introduced (e.g. `from alphaquant.scoring import competitive, risk_score` at the top).
 
 Check that the imports at the top of the file (around lines 47-48) become:
 
@@ -910,6 +897,62 @@ scoring/rating.py, scoring/competitive.py, scoring/risk_score.py removed
   - `FLOW_TIMEOUT_SECONDS: float = 600.0` (module constant in `analysis_flow.py`)
   - `AnalysisFlow.run_crew(self) -> None` — uses `asyncio.wait_for(asyncio.to_thread(self._kickoff_sync), timeout=FLOW_TIMEOUT_SECONDS)`
   - `AnalysisFlow._kickoff_sync(self) -> CrewOutput` — new private method, calls `AnalysisCrew().kickoff(inputs={"ticker": self.state.ticker})`
+
+**Pre-Flight Gate (added 2026-06-21 during pre-flight):** Step 0 reproduces the asyncio shutdown race bug end-to-end with real LLM before any fix is designed. Without this, the rest of Task 3 is built on the sub-2 report's *hypothesized* root cause ("likely the executor gets GC'd or torn down before `parse_crew_output` finishes its work") rather than the actual cause.
+
+---
+
+#### Step 0: Reproduce Blocker 1 (asyncio shutdown race) — REQUIRED BEFORE ANY FIX
+
+Run the actual AAPL CLI end-to-end and capture the FULL traceback of `RuntimeError: cannot schedule new futures after shutdown`. Do NOT skip this step.
+
+```bash
+# Pre-flight: API key + model must be correct (per sub-2 task-3-report.md fix)
+grep MINIMAX_API_KEY .env     # must NOT be placeholder
+grep LITELLM_MODEL .env       # must be openai/MiniMax-M3
+
+# Reproduce
+timeout 600 uv run python -m alphaquant AAPL --format json 2>&1 | tee /tmp/sub3-blocker1-aapl.log | tail -20
+```
+
+Expected output: an `INTERNAL_ERROR` exit with traceback ending in `RuntimeError: cannot schedule new futures after shutdown` from inside `parse_crew_output`.
+
+Then extract the full traceback (the CLI tail truncates it):
+
+```bash
+# Full traceback — search for the line and print 30 lines of context
+grep -n -A 30 "Traceback" /tmp/sub3-blocker1-aapl.log | head -100
+```
+
+Document your findings by appending to `task-3-report.md` (the existing file from sub-2):
+
+```markdown
+## Sub-3 Step 0: Blocker 1 reproduction (commit <commit-hash>)
+
+### Exit status
+exit code / signal / stderr tail
+
+### Full traceback (from grep)
+<traceback>
+
+### Root cause analysis
+<exact line that raises RuntimeError, the asyncio context at that point,
+which futures were already shut down, etc.>
+
+### Confirmed or refuted sub-2 hypothesis
+- [ ] Sub-2 hypothesis: "the Flow's kickoff_with_timeout uses an executor that gets GC'd or torn down before parse_crew_output finishes its work"
+- [ ] Confirmed / Refuted by <evidence>
+
+### Proposed fix direction
+<one paragraph>
+```
+
+**Implementation rule:** If the actual root cause is NOT what sub-2's report hypothesized, do NOT proceed with Steps 1-17 as written. Instead, redesign the fix and update the plan. Common alternative root causes:
+- CrewAI's hierarchical manager awaits tasks in a way that closes the event loop before parse_crew_output returns
+- `parse_crew_output` itself calls something async (e.g. `asyncio.run` inside) that conflicts with the calling event loop
+- The Pydantic model serialization in the report writer triggers a deferred coroutine that hits a closed loop
+
+If the reproduction succeeds and the root cause IS what sub-2 hypothesized, proceed to Step 1.
 
 ---
 
@@ -1138,7 +1181,19 @@ with patch("asyncio.to_thread") as mock_to_thread:
 
 If the test relied on the old `asyncio.to_thread(crew.kickoff, ...)` shape, update it to use `patch.object(AnalysisFlow, "_kickoff_sync")` or a similar approach that targets the new helper. The flow test from sub-2 (`test_run_crew_invokes_crew_with_only_ticker` or similar) may need this fix.
 
-#### Step 17: Commit
+#### Step 17: Re-verify Blocker 1 is fixed end-to-end
+
+Repeat Step 0's reproduction:
+
+```bash
+timeout 600 uv run python -m alphaquant AAPL --format json 2>&1 | tee /tmp/sub3-blocker1-aapl-after.log | tail -20
+```
+
+Expected: AAPL completes successfully and emits a JSON InvestmentReport (no `INTERNAL_ERROR`, no `RuntimeError: cannot schedule new futures after shutdown`). If still failing, return to Step 8 and revise.
+
+Document the before/after in `task-3-report.md` under a new "Sub-3 Step 17 verification" section.
+
+#### Step 18: Commit
 
 ```bash
 git add src/alphaquant/flows/analysis_flow.py \
@@ -1147,7 +1202,8 @@ git add src/alphaquant/flows/analysis_flow.py \
         src/alphaquant/tools/news_tool.py \
         src/alphaquant/tools/financial_tool.py \
         tests/test_flow.py \
-        tests/test_tools.py
+        tests/test_tools.py \
+        task-3-report.md
 git commit -m "fix(flow): 3 deferred blockers — sync kickoff, timeout 600, no empty shell
 
 Sub-project 3:
@@ -1164,7 +1220,9 @@ Sub-project 3:
 - Blocker 3 (tool empty-shell fallback): 4 data tools (company_lookup,
   market_data, news, financial) no longer return {name: 'N/A', ...} empty
   shells on unexpected exception. They return 'Error fetching X: ...' strings,
-  which parse_crew_output's error-string detector already handles as failure."
+  which parse_crew_output's error-string detector already handles as failure.
+
+Reproduced and verified via real LLM end-to-end (AAPL). See task-3-report.md."
 ```
 
 ---
@@ -1408,7 +1466,7 @@ If no findings, skip this commit.
 
 5. **Graceful degradation regression**: if the company tool's `AllDataSourcesDown` re-raise logic is broken, ZZZZZZ will fall back to `INTERNAL_ERROR`. **Mitigation**: Task 4 has an explicit smoke test for this path.
 
-6. **CrewAI 0.203.2 `output_pydantic` API drift**: the spec assumes `task_out.pydantic` attribute name. If CrewAI uses `task_out.pydantic_output` or stores it in `task_out.json_dict`, `_extract_pydantic_field` may need adjustment. **Mitigation**: Task 2 Step 3 helper has a `.raw` JSON fallback that parses via `model_validate_json`, so even if the attribute name is wrong, the helper still works via the raw text.
+6. **CrewAI 0.203.2 `output_pydantic` API drift**: the spec assumes `task_out.pydantic` attribute name. If CrewAI uses `task_out.pydantic_output` or stores it in `task_out.json_dict`, `_extract_pydantic_field` returns `None` and the field is marked unavailable — the flow continues with degraded output. **Mitigation**: implementer must verify the attribute name via Task 1's smoke run; if wrong, patch `_extract_pydantic_field` to use the actual name (no fallback per sub-3 strict-no-fallback decision).
 
 ---
 
