@@ -21,9 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 
 from crewai.flow import Flow, listen, start
@@ -36,35 +34,26 @@ from alphaquant.exceptions import (
     ReportGenerationError,
 )
 from alphaquant.models.company import Company
-from alphaquant.models.competitor import Competitor, CompetitorAnalysis
+from alphaquant.models.competitor import CompetitorAnalysis
 from alphaquant.models.financial import FinancialStatements
 from alphaquant.models.market import MarketData
 from alphaquant.models.news import NewsAnalysis, NewsItem
 from alphaquant.models.report import InvestmentReport
-from alphaquant.models.risk import RiskAssessment, RiskScore
+from alphaquant.models.risk import RiskAssessment
 from alphaquant.models.valuation import ValuationResult
 from alphaquant.observability import get_logger
-from alphaquant.scoring import financial_health, risk_score
-from alphaquant.scoring.rating import determine_rating
 
 log = get_logger("alphaquant.flows.analysis_flow")
+
+# Disclaimer text for all generated reports. Kept in Chinese per spec.
+DISCLAIMER_TEXT = (
+    "本报告由 AI 自动生成，仅供参考，不构成任何投资建议。"
+    "投资有风险，决策需谨慎。"
+)
 
 # §3.4: whole-Flow timeout. Sub-project 2 widens 120→180s to absorb
 # 4 parallel data fetches (~30s each) + manager LLM decisions (~2s each).
 FLOW_TIMEOUT_SECONDS = 180.0
-
-
-# §3.2: GICS peer fallback map. Each sector maps to 3 well-known US large-cap
-# tickers used when the competitor tool returns nothing. If the sector isn't
-# in the map, callers fall back to SPY (market-only) peers.
-GICS_PEERS: dict[str, list[str]] = {
-    "Technology": ["AAPL", "MSFT", "GOOGL"],
-    "Financial": ["JPM", "BAC", "WFC"],
-    "Healthcare": ["JNJ", "PFE", "UNH"],
-    "Energy": ["XOM", "CVX", "COP"],
-    "Consumer": ["WMT", "PG", "COST"],
-    "Communication": ["META", "NFLX", "DIS"],
-}
 
 
 # Maps crew task descriptions to AnalysisState field keys. The order MUST
@@ -144,25 +133,6 @@ def _news_items_to_analysis(items: list[NewsItem], ticker: str) -> NewsAnalysis:
     )
 
 
-def _gics_peers_for(company: Any, ticker: str) -> list[Competitor]:
-    """Build 3 GICS-fallback Competitor entries for a given company."""
-    sector = getattr(company, "sector", None) if company else None
-    tickers = GICS_PEERS.get(sector or "", [])
-    if not tickers or ticker.upper() in [t.upper() for t in tickers]:
-        # Sector unknown OR target ticker is itself in the peer list —
-        # use a market-only fallback so we still emit 3 peers.
-        tickers = ["SPY", "SPY", "SPY"]
-    return [
-        Competitor(
-            ticker=t,
-            name=t,
-            market_cap=0,
-            revenue_ttm=Decimal("0"),
-        )
-        for t in tickers
-    ]
-
-
 def _collect_sources(
     market: MarketData | None,
     news: NewsAnalysis | None,
@@ -190,36 +160,6 @@ def _collect_sources(
             raw.append(competitor.method)
     # dict.fromkeys preserves insertion order while deduping.
     return list(dict.fromkeys(raw))
-
-
-def _default_risk_subscores(state: "AnalysisState") -> list[RiskScore]:
-    """Sub-project 1 fallback: same risk subscores the deterministic Flow uses."""
-    fin_score = 5
-    if state.financial and state.financial.balance_sheets:
-        bs = state.financial.balance_sheets[0]
-        debt_ratio = float(bs.total_liabilities / bs.total_assets * 100) if bs.total_assets else 50
-        fin_score = min(10, max(0, int(debt_ratio / 10)))
-    mkt_score = 5
-    if state.market and state.market.beta is not None:
-        mkt_score = min(10, max(0, int(abs(state.market.beta) * 5)))
-    return [
-        RiskScore(
-            category="financial",
-            score=fin_score,
-            rationale=f"Debt ratio suggests {fin_score}/10 financial risk",
-            evidence=[],
-        ),
-        RiskScore(
-            category="market",
-            score=mkt_score,
-            rationale=f"Beta-implied market risk: {mkt_score}/10",
-            evidence=[],
-        ),
-        RiskScore(category="operational", score=5, rationale="Default neutral", evidence=[]),
-        RiskScore(category="regulatory", score=5, rationale="Default neutral", evidence=[]),
-        RiskScore(category="governance", score=5, rationale="Default neutral", evidence=[]),
-        RiskScore(category="macro", score=5, rationale="Default neutral", evidence=[]),
-    ]
 
 
 def parse_crew_output(
@@ -318,18 +258,6 @@ def parse_crew_output(
     return extracted
 
 
-def _safe_parse(raw: str) -> dict[str, Any]:
-    """Parse a JSON object string → dict. Returns empty dict on any failure."""
-    raw = (raw or "").strip()
-    if not raw or not raw.startswith("{"):
-        return {}
-    try:
-        result = json.loads(raw)
-        return result if isinstance(result, dict) else {}
-    except (json.JSONDecodeError, ValueError):
-        return {}
-
-
 def _extract_pydantic_field(
     tasks_output: list[Any],
     idx: int,
@@ -391,117 +319,6 @@ def _extract_data_field(
         return None, error_msg
 
 
-def _populate_competitor(state: "AnalysisState", data: dict[str, Any]) -> None:
-    from alphaquant.scoring import competitive as scoring_competitive
-
-    peers_raw = data.get("peers", [])
-    peers: list[Competitor] = []
-    for p in peers_raw[:5]:
-        try:
-            peers.append(Competitor(**p))
-        except Exception:
-            continue
-    if not peers and state.company is not None:
-        peers = _gics_peers_for(state.company, state.ticker)
-    target_metrics = {
-        "market_cap": float(state.market.market_cap if state.market else 0),
-        "revenue_growth_yoy": float(
-            state.market.revenue_growth_yoy
-            if state.market and state.market.revenue_growth_yoy
-            else 0
-        ),
-        "gross_margin": 0,
-        "net_margin": 0,
-    }
-    score = scoring_competitive.compute(target_metrics, peers)
-    state.competitor = CompetitorAnalysis(
-        target_ticker=state.ticker,
-        competitors=peers,
-        industry_rank=1,
-        industry_size=max(10, len(peers) + 1),
-        competitive_score=score,
-        strengths=[],
-        weaknesses=[],
-        method="computed" if peers_raw else "fallback",
-    )
-
-
-def _populate_risk(state: "AnalysisState", data: dict[str, Any]) -> None:
-    from alphaquant.scoring import risk_score as scoring_risk
-
-    sub_scores_data = data.get("sub_scores", [])
-    sub_scores: list[RiskScore] = (
-        [
-            RiskScore(
-                category=s["category"],
-                score=s["score"],
-                rationale=s.get("rationale", ""),
-                evidence=[],
-            )
-            for s in sub_scores_data
-        ]
-        if sub_scores_data
-        else _default_risk_subscores(state)
-    )
-    total = scoring_risk.compute(sub_scores)
-    level = scoring_risk.determine_level(total)
-    state.risk = RiskAssessment(
-        ticker=state.ticker,
-        total_score=total,
-        level=level,
-        sub_scores=sub_scores,
-        top_risks=[s.rationale for s in sub_scores[:3]],
-    )
-
-
-def _populate_valuation(state: "AnalysisState", data: dict[str, Any]) -> None:
-    # Sub-project 1: deterministic fallback (current Flow logic).
-    from alphaquant.scoring.dcf import compute_dcf_value
-
-    current = state.market.price if state.market else Decimal("0")
-    pe = state.market.pe_ratio if state.market and state.market.pe_ratio else 20.0
-    peer_pe_avg = 20.0
-    relative_value = current * Decimal(str(peer_pe_avg / pe)) if pe > 0 else current
-
-    fcf_data = (
-        state.financial.cash_flows[0].free_cash_flow
-        if state.financial and state.financial.cash_flows
-        else None
-    )
-    growth_pct = state.market.revenue_growth_yoy if state.market else None
-    growth_rate = (growth_pct / 100.0) if growth_pct is not None else 0.05
-    shares_outstanding = (
-        int(state.market.market_cap / state.market.price)
-        if state.market and state.market.price > 0
-        else 0
-    )
-    dcf_value = None
-    if fcf_data is not None and fcf_data > 0 and shares_outstanding > 0:
-        dcf_value = compute_dcf_value(
-            fcf=fcf_data,
-            growth_rate=growth_rate,
-            shares_outstanding=shares_outstanding,
-        )
-    if dcf_value is not None and relative_value is not None:
-        intrinsic = (dcf_value + relative_value) / 2
-        method = "dcf_relative_peg"
-    else:
-        intrinsic = relative_value
-        method = "relative_only"
-    upside = float((intrinsic - current) / current) if current else 0.0
-    state.valuation = ValuationResult(
-        ticker=state.ticker,
-        intrinsic_value_per_share=intrinsic,
-        current_price=current,
-        upside_pct=round(upside, 4),
-        dcf_value=dcf_value,
-        relative_value=relative_value,
-        peg_ratio=None,
-        method=method,
-        assumptions={"peer_pe_avg": peer_pe_avg},
-    )
-
-
 class AnalysisFlow(Flow[AnalysisState]):
     """Top-level Flow: 2-step thin shell wrapping AnalysisCrew."""
 
@@ -556,99 +373,36 @@ class AnalysisFlow(Flow[AnalysisState]):
 
     @listen(run_crew)
     async def synthesize_report(self) -> None:
-        """Step 2: Synthesize InvestmentReport from crew-driven state.
+        """Sub-project 3: state.report is already populated by ReportWriter agent.
 
-        On any synthesis failure, raise ``ReportGenerationError`` so the
-        caller (FastAPI handler per spec §5.2) can return HTTP 500.
+        This step fills only runtime-only fields (sources, disclaimer, generated_at)
+        and raises ReportGenerationError if the report writer failed.
         """
-        log.info("flow_step_started", step="synthesize_report", ticker=self.state.ticker)
-        assert self.state.company is not None
-        assert self.state.news is not None
-        assert self.state.financial is not None
-        assert self.state.competitor is not None
-        assert self.state.risk is not None
-        assert self.state.valuation is not None
-
-        # §3.2: market may be None (degraded) — substitute a minimal placeholder
-        # so InvestmentReport.markdown and downstream consumers can render.
-        market = self.state.market
-        if market is None:
-            market = MarketData(
-                ticker=self.state.ticker,
-                as_of=datetime.utcnow(),
-                price=Decimal("0"),
-                change_pct=0.0,
-                volume=0,
-                market_cap=self.state.company.market_cap,
-                source="degraded",
-            )
-            self.state.market = market
-
-        try:
-            rating, confidence = determine_rating(
-                self.state.valuation, self.state.risk, self.state.news
-            )
-            health_score = financial_health.compute(self.state.financial)
-
-            markdown = _build_markdown(
-                self.state.company,
-                market,
-                self.state.financial,
-                self.state.news,
-                self.state.competitor,
-                self.state.risk,
-                self.state.valuation,
-                rating,
-                confidence,
-                health_score,
-            )
-
-            self.state.report = InvestmentReport(
-                report_id=str(uuid.uuid4()),
-                ticker=self.state.ticker,
-                generated_at=datetime.utcnow(),
-                data_as_of={
-                    "market": market.as_of,
-                    "news": self.state.news.as_of,
-                },
-                company=self.state.company,
-                market=market,
-                financial=self.state.financial,
-                financial_health_score=health_score,
-                news=self.state.news,
-                competitors=self.state.competitor,
-                risk=self.state.risk,
-                valuation=self.state.valuation,
-                rating=rating,
-                confidence=confidence,
-                catalysts=[],
-                markdown=markdown,
-                sources=_collect_sources(
-                    market,
-                    self.state.news,
-                    self.state.financial,
-                    self.state.competitor,
-                ),
-            )
-            log.info(
-                "flow_step_completed",
-                step="synthesize_report",
-                ticker=self.state.ticker,
-                report_id=self.state.report.report_id,
-                rating=rating,
-                confidence=confidence,
-                health_score=health_score,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            log.error(
-                "flow_step_failed",
-                step="synthesize_report",
-                ticker=self.state.ticker,
-                error=str(exc),
-            )
+        if self.state.report is None:
+            log.error("report_writer_failed", ticker=self.state.ticker)
             raise ReportGenerationError(
-                f"Failed to synthesize report for {self.state.ticker}: {exc}"
-            ) from exc
+                f"Report writer agent failed to produce InvestmentReport for {self.state.ticker}"
+            )
+
+        log.info("flow_step_started", step="synthesize_report", ticker=self.state.ticker)
+
+        # Re-derive sources from upstream data (so they reflect actual data presence, not LLM guess)
+        self.state.report.sources = _collect_sources(
+            self.state.market, self.state.news, self.state.financial, self.state.competitor
+        )
+
+        # Runtime fields
+        self.state.report.disclaimer = DISCLAIMER_TEXT  # constant from sub-1, kept verbatim
+        self.state.report.generated_at = datetime.utcnow()
+
+        log.info(
+            "flow_step_completed",
+            step="synthesize_report",
+            ticker=self.state.ticker,
+            report_id=self.state.report.report_id,
+            rating=self.state.report.rating,
+            confidence=self.state.report.confidence,
+        )
 
     async def kickoff_with_timeout(self, inputs: dict[str, Any] | None = None) -> Any:
         """§3.4 whole-Flow 120s timeout wrapper.
@@ -670,54 +424,3 @@ class AnalysisFlow(Flow[AnalysisState]):
                 timeout_seconds=FLOW_TIMEOUT_SECONDS,
             )
             raise
-
-
-def _build_markdown(
-    company, market, financial, news, competitors, risk, valuation, rating, confidence, health_score
-) -> str:
-    upside_pct = valuation.upside_pct * 100
-    return f"""# {company.ticker} {company.name} 投资研究报告
-
-> **生成时间**: {datetime.utcnow().isoformat()}
-> **免责声明**: 本报告由 AI 自动生成，仅供参考，不构成任何投资建议。投资有风险，决策需谨慎。
-
-## 执行摘要
-- **投资评级**: {rating} (置信度 {confidence}%)
-- **当前价**: ${market.price} → 内在价值 ${valuation.intrinsic_value_per_share or market.price}
-- **潜在涨跌**: {upside_pct:+.1f}%
-
-## 公司概览
-- 行业: {company.sector} / {company.industry}
-- 交易所: {company.exchange}
-- 市值: ${company.market_cap:,}
-
-## 市场分析
-- 当前价: ${market.price}
-- 市盈率 (P/E): {market.pe_ratio or 'N/A'}
-- 52 周区间: ${market.low_52w or 'N/A'} - ${market.high_52w or 'N/A'}
-- Beta: {market.beta or 'N/A'}
-
-## 财务分析
-- 财务健康评分: {health_score}/100
-- 数据源: {financial.source}
-
-## 新闻情绪
-- 情绪评分: {news.sentiment_score:.2f} (-1 ~ +1)
-- 正面 {news.positive_pct:.0%} | 负面 {news.negative_pct:.0%} | 中性 {news.neutral_pct:.0%}
-
-## 竞争对手
-- 行业排名: #{competitors.industry_rank}/{competitors.industry_size}
-- 竞争力评分: {competitors.competitive_score}/100
-- 对标公司数: {len(competitors.competitors)}
-
-## 风险评估
-- 风险等级: {risk.level}
-- 总分: {risk.total_score}/100
-
-## 估值与建议
-- 方法: {valuation.method}
-- 内在价值: ${valuation.intrinsic_value_per_share or 'N/A'}
-- 假设: {valuation.assumptions}
-
----
-*本报告由 AI 自动生成，仅供参考，不构成任何投资建议。*"""
