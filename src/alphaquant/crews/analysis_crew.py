@@ -27,49 +27,56 @@ from alphaquant.agents.report_writer import build_report_writer_agent
 from alphaquant.agents.risk_analyst import build_risk_analyst_agent
 from alphaquant.agents.valuation_analyst import build_valuation_analyst_agent
 from alphaquant.infrastructure.llm import get_llm
+from alphaquant.models.competitor import CompetitorAnalysis
+from alphaquant.models.risk import RiskAssessment
+from alphaquant.models.valuation import ValuationResult
+from alphaquant.models.report import InvestmentReport
+from pydantic import BaseModel
 
 
-_TASK_TEMPLATES: list[tuple[str, str, str]] = [
-    # (role_key, description_template, expected_output)
+# Sub-project 3: each entry is (role_key, description_template, output_pydantic_model_or_None).
+# Data tasks (idx 0-3) keep None (their tool returns raw JSON, parsed in Flow).
+# Analysis tasks (idx 4-6) get Pydantic models. Report writer (idx 7) gets InvestmentReport.
+_TASK_TEMPLATES: list[tuple[str, str, type[BaseModel] | None]] = [
     (
         "company_resolver",
         "Validate ticker '{ticker}' and return canonical company metadata.",
-        "JSON with company name, exchange, sector, industry, market cap",
+        None,
     ),
     (
         "market_analyst",
         "Fetch market data for '{ticker}'.",
-        "JSON with price, P/E, market cap, 52w range, beta, growth metrics",
+        None,
     ),
     (
         "news_analyst",
         "Fetch recent news for '{ticker}'.",
-        "JSON array of news items (date, title, source, url)",
+        None,
     ),
     (
         "financial_analyst",
         "Fetch financial statements for '{ticker}'.",
-        "JSON with income statements, balance sheets, cash flows",
+        None,
     ),
     (
         "competitor_analyst",
         "Identify competitors and compute competitive score for '{ticker}'.",
-        "JSON with peer tickers, market caps, growth, margins, rank",
+        CompetitorAnalysis,
     ),
     (
         "risk_analyst",
         "Compute risk assessment for '{ticker}' from upstream data.",
-        "JSON with sub-scores per category and total",
+        RiskAssessment,
     ),
     (
         "valuation_analyst",
         "Compute valuation (DCF + relative) for '{ticker}'.",
-        "JSON with intrinsic value, DCF value, relative value, upside",
+        ValuationResult,
     ),
     (
         "report_writer",
-        "Synthesize InvestmentReport markdown for '{ticker}'.",
-        "Markdown report with rating, confidence, sections",
+        "Synthesize InvestmentReport for '{ticker}'.",
+        InvestmentReport,
     ),
 ]
 
@@ -82,6 +89,11 @@ class AnalysisCrew:
     in the calling Flow. Sub-project 3 will let agents do real reasoning;
     sub-project 4 will enable memory and peer delegation.
     """
+
+    # Indices of tasks that run in parallel via async_execution=True.
+    # Data (0-3) and analysis (4-6) are independent → parallel.
+    # Report writer (7) depends on analysis outputs → serial.
+    _ASYNC_TASK_INDICES: set[int] = {0, 1, 2, 3, 4, 5, 6}
 
     def __init__(self) -> None:
         self._llm = get_llm(temperature=0.1)
@@ -102,23 +114,21 @@ class AnalysisCrew:
         ]
 
     def _build_tasks(self) -> list[Task]:
-        # Sub-project 2: first 4 (data) tasks run in parallel via
-        # Task(async_execution=True). Manager LLM schedules them concurrently
-        # in the hierarchical process. Remaining 4 (analysis) tasks stay
-        # sequential (default CrewAI behavior in hierarchical mode).
-        _ASYNC_TASK_INDICES = {0, 1, 2, 3}
-
         tasks: list[Task] = []
-        for idx, (role_key, description, expected) in enumerate(_TASK_TEMPLATES):
+        for idx, (role_key, description, pydantic_model) in enumerate(_TASK_TEMPLATES):
             agent = self.agents[idx]
-            tasks.append(
-                Task(
-                    description=description,
-                    expected_output=expected,
-                    agent=agent,
-                    async_execution=(idx in _ASYNC_TASK_INDICES),
-                )
-            )
+            task_kwargs: dict[str, Any] = {
+                "description": description,
+                "expected_output": pydantic_model.__name__ if pydantic_model else "raw text",
+                "agent": agent,
+                "async_execution": idx in self._ASYNC_TASK_INDICES,
+            }
+            if pydantic_model is not None:
+                task_kwargs["output_pydantic"] = pydantic_model
+            # Report writer (idx 7) consumes the 3 analysis tasks' Pydantic outputs
+            if idx == 7:
+                task_kwargs["context"] = [tasks[4], tasks[5], tasks[6]]
+            tasks.append(Task(**task_kwargs))
         return tasks
 
     def _build_crew(self) -> Crew:

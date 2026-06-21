@@ -162,7 +162,7 @@ class TestAnalysisCrew:
                 assert isinstance(tool, expected_cls)
 
     def test_data_tasks_have_async_execution(self, monkeypatch, fake_llm):
-        """Sub-project 2: 4 data tasks (company/market/news/financial) run in parallel."""
+        """Sub-project 3: 7 tasks (data + analysis) run in parallel; report writer (idx 7) is serial."""
         monkeypatch.setattr(
             "alphaquant.crews.analysis_crew.get_llm", lambda **kw: fake_llm
         )
@@ -170,16 +170,115 @@ class TestAnalysisCrew:
 
         crew = AnalysisCrew()
 
-        # First 4 tasks are data tasks (per _TASK_TEMPLATES order).
-        data_tasks = crew.tasks[:4]
-        for task in data_tasks:
+        # First 7 tasks (data + analysis) are async per _ASYNC_TASK_INDICES.
+        parallel_tasks = crew.tasks[:7]
+        for task in parallel_tasks:
             assert task.async_execution is True, (
                 f"Task '{task.description[:40]}...' should run in parallel"
             )
 
-        # Remaining 4 tasks are analysis tasks (deterministic, sequential).
-        analysis_tasks = crew.tasks[4:]
-        for task in analysis_tasks:
-            assert task.async_execution in (False, None), (
-                f"Task '{task.description[:40]}...' should run sequentially"
-            )
+        # Report writer (idx 7) is serial.
+        report_task = crew.tasks[7]
+        assert report_task.async_execution in (False, None), (
+            f"Task '{report_task.description[:40]}...' should run sequentially"
+        )
+
+    def test_task_templates_uses_3_tuple_with_pydantic_model(self):
+        """_TASK_TEMPLATES entries must be (key, description, pydantic_model_or_None)."""
+        from alphaquant.crews.analysis_crew import _TASK_TEMPLATES
+        from alphaquant.models.competitor import CompetitorAnalysis
+        from alphaquant.models.risk import RiskAssessment
+        from alphaquant.models.valuation import ValuationResult
+        from alphaquant.models.report import InvestmentReport
+
+        assert len(_TASK_TEMPLATES) == 8
+        for entry in _TASK_TEMPLATES:
+            assert len(entry) == 3, f"expected 3-tuple, got {len(entry)}-tuple: {entry!r}"
+
+        keys = [t[0] for t in _TASK_TEMPLATES]
+        assert keys == [
+            "company_resolver", "market_analyst", "news_analyst", "financial_analyst",
+            "competitor_analyst", "risk_analyst", "valuation_analyst", "report_writer",
+        ]
+
+        # 4 data tasks: no Pydantic output (tool JSON only)
+        assert _TASK_TEMPLATES[0][2] is None
+        assert _TASK_TEMPLATES[1][2] is None
+        assert _TASK_TEMPLATES[2][2] is None
+        assert _TASK_TEMPLATES[3][2] is None
+        # 3 analysis tasks + report writer: Pydantic
+        assert _TASK_TEMPLATES[4][2] is CompetitorAnalysis
+        assert _TASK_TEMPLATES[5][2] is RiskAssessment
+        assert _TASK_TEMPLATES[6][2] is ValuationResult
+        assert _TASK_TEMPLATES[7][2] is InvestmentReport
+
+    def test_async_task_indices_cover_data_and_analysis_not_report(self):
+        """_ASYNC_TASK_INDICES must cover 0-6 (data + analysis), not 7 (report writer)."""
+        from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
+
+        # Build crew with a fake LLM to avoid network calls
+        from unittest.mock import patch
+        from tests.conftest import _FakeLLM
+        fake = _FakeLLM()
+        with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
+            crew = _AC()
+        async_indices = getattr(crew, "_ASYNC_TASK_INDICES", None)
+        assert async_indices is not None, "_ASYNC_TASK_INDICES must be a class-level constant"
+        assert async_indices == {0, 1, 2, 3, 4, 5, 6}
+        assert 7 not in async_indices  # report writer is serial
+
+    def test_report_writer_task_has_context_with_analysis_tasks(self):
+        """Report writer (idx 7) must receive task 4/5/6 as context."""
+        from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
+        from unittest.mock import patch
+        from tests.conftest import _FakeLLM
+        fake = _FakeLLM()
+        with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
+            crew = _AC()
+        report_task = crew.tasks[7]
+        ctx = getattr(report_task, "context", None) or []
+        assert len(ctx) == 3
+        # context should reference the same task objects as tasks 4/5/6
+        assert crew.tasks[4] in ctx
+        assert crew.tasks[5] in ctx
+        assert crew.tasks[6] in ctx
+
+    def test_competitor_task_has_output_pydantic(self):
+        from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
+        from alphaquant.models.competitor import CompetitorAnalysis
+        from unittest.mock import patch
+        from tests.conftest import _FakeLLM
+        fake = _FakeLLM()
+        with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
+            crew = _AC()
+        assert getattr(crew.tasks[4], "output_pydantic", None) is CompetitorAnalysis
+
+    def test_risk_task_has_output_pydantic(self):
+        from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
+        from alphaquant.models.risk import RiskAssessment
+        from unittest.mock import patch
+        from tests.conftest import _FakeLLM
+        fake = _FakeLLM()
+        with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
+            crew = _AC()
+        assert getattr(crew.tasks[5], "output_pydantic", None) is RiskAssessment
+
+    def test_valuation_task_has_output_pydantic(self):
+        from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
+        from alphaquant.models.valuation import ValuationResult
+        from unittest.mock import patch
+        from tests.conftest import _FakeLLM
+        fake = _FakeLLM()
+        with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
+            crew = _AC()
+        assert getattr(crew.tasks[6], "output_pydantic", None) is ValuationResult
+
+    def test_report_writer_task_has_output_pydantic(self):
+        from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
+        from alphaquant.models.report import InvestmentReport
+        from unittest.mock import patch
+        from tests.conftest import _FakeLLM
+        fake = _FakeLLM()
+        with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
+            crew = _AC()
+        assert getattr(crew.tasks[7], "output_pydantic", None) is InvestmentReport
