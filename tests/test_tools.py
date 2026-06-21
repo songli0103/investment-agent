@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from alphaquant.tools.competitor_tool import CompetitorTool
+from alphaquant.tools.company_lookup_tool import CompanyLookupTool
 from alphaquant.tools.dcf_tool import DCFTool
 from alphaquant.tools.financial_tool import FinancialTool
 from alphaquant.tools.market_data_tool import MarketDataInput, MarketDataTool
@@ -19,9 +20,10 @@ from alphaquant.tools.news_tool import NewsTool
 # ---------------------------------------------------------------------------
 
 def test_tools_importable():
-    """All five tool classes import from alphaquant.tools."""
+    """All six tool classes import from alphaquant.tools."""
     from alphaquant.tools import (  # noqa: F401
         CompetitorTool,
+        CompanyLookupTool,  # NEW sub-2
         DCFTool,
         FinancialTool,
         MarketDataTool,
@@ -38,6 +40,7 @@ class TestToolMetadata:
             (FinancialTool, "financial_statements_lookup"),
             (CompetitorTool, "competitor_lookup"),
             (DCFTool, "dcf_assumptions"),
+            (CompanyLookupTool, "company_lookup"),  # NEW sub-2
         ],
     )
     def test_name(self, cls, expected_name):
@@ -45,7 +48,7 @@ class TestToolMetadata:
 
     @pytest.mark.parametrize(
         "cls",
-        [MarketDataTool, NewsTool, FinancialTool, CompetitorTool, DCFTool],
+        [MarketDataTool, NewsTool, FinancialTool, CompetitorTool, DCFTool, CompanyLookupTool],  # added
     )
     def test_description_is_nonempty(self, cls):
         assert isinstance(cls().description, str)
@@ -53,7 +56,7 @@ class TestToolMetadata:
 
     @pytest.mark.parametrize(
         "cls",
-        [MarketDataTool, NewsTool, FinancialTool, CompetitorTool, DCFTool],
+        [MarketDataTool, NewsTool, FinancialTool, CompetitorTool, DCFTool, CompanyLookupTool],  # added
     )
     def test_has_run(self, cls):
         assert callable(getattr(cls(), "_run", None))
@@ -284,6 +287,77 @@ class TestFinancialTool:
             result = FinancialTool()._run("AAPL")
 
         assert "Error fetching financials" in result
+
+
+# ---------------------------------------------------------------------------
+# CompanyLookupTool: wraps DataSourceRegistry.get_company
+# ---------------------------------------------------------------------------
+
+class TestCompanyLookupTool:
+    def test_returns_json_on_company_data(self):
+        from alphaquant.models.company import Company
+
+        company = Company(
+            ticker="AAPL",
+            name="Apple Inc.",
+            exchange="NASDAQ",
+            sector="Technology",
+            industry="Consumer Electronics",
+            market_cap=3_000_000_000_000,
+        )
+
+        class FakeRegistry:
+            async def get_company(self, ticker):
+                return company
+
+        with patch("alphaquant.tools.company_lookup_tool.DataSourceRegistry", FakeRegistry):
+            result = CompanyLookupTool()._run("AAPL")
+
+        assert "Apple Inc." in result
+        assert "NASDAQ" in result
+        assert "Technology" in result
+
+    def test_returns_error_message_on_alldatasourcesdown(self):
+        from alphaquant.exceptions import AllDataSourcesDown
+
+        class FakeRegistry:
+            async def get_company(self, ticker):
+                raise AllDataSourcesDown("all sources down for ZZZZ")
+
+        with patch("alphaquant.tools.company_lookup_tool.DataSourceRegistry", FakeRegistry):
+            result = CompanyLookupTool()._run("ZZZZ")
+
+        # AllDataSourcesDown must be caught and returned as error string,
+        # NOT propagated (agents receive strings, not exceptions)
+        assert "Error fetching company" in result
+        assert "all sources down" in result
+
+    def test_returns_error_message_on_generic_exception(self):
+        class FakeRegistry:
+            async def get_company(self, ticker):
+                raise RuntimeError("net down")
+
+        with patch("alphaquant.tools.company_lookup_tool.DataSourceRegistry", FakeRegistry):
+            result = CompanyLookupTool()._run("AAPL")
+
+        assert "Error fetching company" in result
+        assert "net down" in result
+
+    def test_timeout_returns_error_message(self):
+        """If get_company exceeds 30s, tool returns timeout error string."""
+        import asyncio
+
+        class FakeRegistry:
+            async def get_company(self, ticker):
+                await asyncio.sleep(60)  # exceeds 30s timeout
+                return None
+
+        with patch("alphaquant.tools.company_lookup_tool.DataSourceRegistry", FakeRegistry), \
+             patch("alphaquant.tools.company_lookup_tool.TOOL_TIMEOUT_SECONDS", 0.1):
+            result = CompanyLookupTool()._run("AAPL")
+
+        assert "Error fetching company" in result
+        assert "timeout" in result.lower() or "TimeoutError" in result
 
 
 # ---------------------------------------------------------------------------

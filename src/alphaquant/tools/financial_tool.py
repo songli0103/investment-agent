@@ -6,6 +6,9 @@ from crewai.tools import BaseTool
 from alphaquant.infrastructure.data_sources import DataSourceRegistry
 
 
+TOOL_TIMEOUT_SECONDS = 30.0
+
+
 class FinancialTool(BaseTool):
     name: str = "financial_statements_lookup"
     description: str = "Fetch financial statements (income statement, balance sheet, cash flow) for a US stock ticker."
@@ -16,8 +19,17 @@ class FinancialTool(BaseTool):
         registry = DataSourceRegistry()
         try:
             loop = asyncio.new_event_loop()
-            statements = loop.run_until_complete(registry.get_financial(ticker))
-            loop.close()
+            try:
+                statements = loop.run_until_complete(
+                    asyncio.wait_for(
+                        registry.get_financial(ticker),
+                        timeout=TOOL_TIMEOUT_SECONDS,
+                    )
+                )
+            finally:
+                loop.close()
+        except asyncio.TimeoutError:
+            return f"Error fetching financials: timeout after {TOOL_TIMEOUT_SECONDS}s"
         except Exception as e:
             return f"Error fetching financials: {e}"
         if not statements:
@@ -25,4 +37,4 @@ class FinancialTool(BaseTool):
         return statements.model_dump_json(indent=2)
 
 
-__all__ = ["FinancialTool"]
+__all__ = ["FinancialTool", "TOOL_TIMEOUT_SECONDS"]

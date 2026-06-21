@@ -6,6 +6,9 @@ from crewai.tools import BaseTool
 from alphaquant.infrastructure.data_sources import DataSourceRegistry
 
 
+TOOL_TIMEOUT_SECONDS = 30.0
+
+
 class NewsTool(BaseTool):
     name: str = "news_lookup"
     description: str = "Fetch recent news (last 30 days) for a US stock ticker. Returns news items with titles, sources, dates."
@@ -16,8 +19,17 @@ class NewsTool(BaseTool):
         registry = DataSourceRegistry()
         try:
             loop = asyncio.new_event_loop()
-            news = loop.run_until_complete(registry.get_news(ticker, days=30))
-            loop.close()
+            try:
+                news = loop.run_until_complete(
+                    asyncio.wait_for(
+                        registry.get_news(ticker, days=30),
+                        timeout=TOOL_TIMEOUT_SECONDS,
+                    )
+                )
+            finally:
+                loop.close()
+        except asyncio.TimeoutError:
+            return f"Error fetching news: timeout after {TOOL_TIMEOUT_SECONDS}s"
         except Exception as e:
             return f"Error fetching news: {e}"
         if not news:
@@ -39,4 +51,4 @@ class NewsTool(BaseTool):
         )
 
 
-__all__ = ["NewsTool"]
+__all__ = ["NewsTool", "TOOL_TIMEOUT_SECONDS"]

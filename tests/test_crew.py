@@ -13,6 +13,7 @@ from alphaquant.agents.report_writer import build_report_writer_agent
 from alphaquant.agents.risk_analyst import build_risk_analyst_agent
 from alphaquant.agents.valuation_analyst import build_valuation_analyst_agent
 from alphaquant.tools.competitor_tool import CompetitorTool
+from alphaquant.tools.company_lookup_tool import CompanyLookupTool  # NEW sub-2
 from alphaquant.tools.dcf_tool import DCFTool
 from alphaquant.tools.financial_tool import FinancialTool
 from alphaquant.tools.market_data_tool import MarketDataTool
@@ -123,7 +124,7 @@ class TestAnalysisCrew:
     def test_tools_mapping(self, monkeypatch, fake_llm):
         """Each agent's tools match the spec table."""
         expected_tools = {
-            build_company_resolver_agent: [],
+            build_company_resolver_agent: [CompanyLookupTool],  # sub-2: was []
             build_market_analyst_agent: [MarketDataTool],
             build_news_analyst_agent: [NewsTool],
             build_financial_analyst_agent: [FinancialTool],

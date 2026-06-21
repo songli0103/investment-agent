@@ -7,6 +7,9 @@ from pydantic import BaseModel, Field
 from alphaquant.infrastructure.data_sources import DataSourceRegistry
 
 
+TOOL_TIMEOUT_SECONDS = 30.0
+
+
 class MarketDataInput(BaseModel):
     ticker: str = Field(..., description="Stock ticker symbol, e.g. 'AAPL'")
 
@@ -21,8 +24,17 @@ class MarketDataTool(BaseTool):
         registry = DataSourceRegistry()
         try:
             loop = asyncio.new_event_loop()
-            market = loop.run_until_complete(registry.get_market(ticker))
-            loop.close()
+            try:
+                market = loop.run_until_complete(
+                    asyncio.wait_for(
+                        registry.get_market(ticker),
+                        timeout=TOOL_TIMEOUT_SECONDS,
+                    )
+                )
+            finally:
+                loop.close()
+        except asyncio.TimeoutError:
+            return f"Error fetching market data: timeout after {TOOL_TIMEOUT_SECONDS}s"
         except Exception as e:
             return f"Error fetching market data: {e}"
         if not market:
@@ -30,4 +42,4 @@ class MarketDataTool(BaseTool):
         return market.model_dump_json(indent=2)
 
 
-__all__ = ["MarketDataTool", "MarketDataInput"]
+__all__ = ["MarketDataTool", "MarketDataInput", "TOOL_TIMEOUT_SECONDS"]

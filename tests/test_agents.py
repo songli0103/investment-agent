@@ -16,6 +16,7 @@ from alphaquant.agents.report_writer import build_report_writer_agent
 from alphaquant.agents.risk_analyst import build_risk_analyst_agent
 from alphaquant.agents.valuation_analyst import build_valuation_analyst_agent
 from alphaquant.tools.competitor_tool import CompetitorTool
+from alphaquant.tools.company_lookup_tool import CompanyLookupTool
 from alphaquant.tools.dcf_tool import DCFTool
 from alphaquant.tools.financial_tool import FinancialTool
 from alphaquant.tools.market_data_tool import MarketDataTool
@@ -50,11 +51,12 @@ def fake_llm() -> LLM:
 class TestAgentBuilders:
     """Each builder accepts an LLM and returns a configured Agent."""
 
-    def test_company_resolver_has_no_tools(self, fake_llm):
+    def test_company_resolver_has_company_lookup_tool(self, fake_llm):
         from crewai import Agent
         agent = build_company_resolver_agent(fake_llm)
         assert isinstance(agent, Agent)
-        assert agent.tools == []
+        assert len(agent.tools) == 1
+        assert isinstance(agent.tools[0], CompanyLookupTool)
 
     def test_market_analyst_has_market_data_tool(self, fake_llm):
         agent = build_market_analyst_agent(fake_llm)
