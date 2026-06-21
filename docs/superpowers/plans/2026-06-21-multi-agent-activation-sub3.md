@@ -881,12 +881,12 @@ scoring/rating.py, scoring/competitive.py, scoring/risk_score.py removed
 
 **Files:**
 - Modify: `src/alphaquant/flows/analysis_flow.py:54` (FLOW_TIMEOUT_SECONDS 180 → 600)
-- Modify: `src/alphaquant/flows/analysis_flow.py:108-200` (rewrite `run_crew` with sync kickoff wrap)
+- Modify: `src/alphaquant/flows/analysis_flow.py:108-200` (rewrite `run_crew` with sync kickoff wrap, IF Step 5.5 shows Blocker 1 still occurs)
 - Modify: `src/alphaquant/tools/company_lookup_tool.py` (drop `except Exception` empty-shell fallback)
 - Modify: `src/alphaquant/tools/market_data_tool.py` (drop `except Exception` empty-shell fallback)
 - Modify: `src/alphaquant/tools/news_tool.py` (drop `except Exception` empty-shell fallback)
 - Modify: `src/alphaquant/tools/financial_tool.py` (drop `except Exception` empty-shell fallback)
-- Modify: `tests/test_flow.py` (update flow timeout test; add test for sync kickoff)
+- Modify: `tests/test_flow.py` (update flow timeout test; add test for sync kickoff IF needed)
 - Modify: `tests/test_tools.py` (update tool tests to expect error string on exception, not empty shell)
 - Test: `tests/test_flow.py`
 - Test: `tests/test_tools.py`
@@ -895,64 +895,67 @@ scoring/rating.py, scoring/competitive.py, scoring/risk_score.py removed
 - Consumes: `AnalysisFlow.state`, `AnalysisCrew.kickoff(inputs: dict)`
 - Produces:
   - `FLOW_TIMEOUT_SECONDS: float = 600.0` (module constant in `analysis_flow.py`)
-  - `AnalysisFlow.run_crew(self) -> None` — uses `asyncio.wait_for(asyncio.to_thread(self._kickoff_sync), timeout=FLOW_TIMEOUT_SECONDS)`
-  - `AnalysisFlow._kickoff_sync(self) -> CrewOutput` — new private method, calls `AnalysisCrew().kickoff(inputs={"ticker": self.state.ticker})`
+  - `AnalysisFlow.run_crew(self) -> None` — uses `asyncio.wait_for(asyncio.to_thread(self._kickoff_sync), timeout=FLOW_TIMEOUT_SECONDS)` *(only if Step 5.5 shows Blocker 1 still occurs)*
+  - `AnalysisFlow._kickoff_sync(self) -> CrewOutput` — new private method *(conditional on Step 5.5)*
 
-**Pre-Flight Gate (added 2026-06-21 during pre-flight):** Step 0 reproduces the asyncio shutdown race bug end-to-end with real LLM before any fix is designed. Without this, the rest of Task 3 is built on the sub-2 report's *hypothesized* root cause ("likely the executor gets GC'd or torn down before `parse_crew_output` finishes its work") rather than the actual cause.
+**Pre-Flight Gate (revised 2026-06-21 after Step 0 partial reproduction):**
+
+The original plan assumed Blocker 1 (asyncio shutdown race in `parse_crew_output`) was the proximate issue. **Step 0 partial reproduction (commit `dbfac17`'s evidence, log `/tmp/sub3-blocker1-aapl.log`) showed this assumption is wrong.** The actual proximate blocker is **Blocker 2** (`FLOW_TIMEOUT_SECONDS=180`) — AAPL hits the 180s timeout before `parse_crew_output` is ever called. Blocker 1 may or may not still occur after Blocker 2 is fixed; we don't know yet.
+
+Also discovered during Step 0 (committed as `dbfac17` BEFORE Task 3 began):
+- `ValuationResult.method` Literal too narrow — LLM produces "blended"
+- `CompetitorAnalysis.method` Literal too narrow — LLM produces "hybrid"
+- Both Literal constraints have been widened in `dbfac17` with tests in `tests/test_models_literals.py`
+
+**Revised task order:**
+1. Step 0 (already partial-done): reproduce and document what blocks first
+2. **Steps 1-5 first**: widen `FLOW_TIMEOUT_SECONDS` 180→600 (Blocker 2 fix)
+3. **New Step 5.5**: re-run AAPL with widened timeout + widened Literals to actually attempt Blocker 1 reproduction
+4. **Steps 6-10**: ONLY IF Step 5.5 shows Blocker 1 still occurs — sync kickoff wrap (Blocker 1 fix)
+5. **Steps 11-16**: tool empty-shell fallback (Blocker 3 fix) — independent of 1+2
+6. **Step 17**: re-verify all blockers fixed end-to-end
 
 ---
 
-#### Step 0: Reproduce Blocker 1 (asyncio shutdown race) — REQUIRED BEFORE ANY FIX
+#### Step 0: Reproduce blockers end-to-end (PARTIAL — already done in commit `dbfac17`'s evidence)
 
-Run the actual AAPL CLI end-to-end and capture the FULL traceback of `RuntimeError: cannot schedule new futures after shutdown`. Do NOT skip this step.
+The first implementer run of this step produced these findings (saved at `/tmp/sub3-blocker1-aapl.log`, 48KB). **Reproduce to verify they still hold**, then document:
 
 ```bash
-# Pre-flight: API key + model must be correct (per sub-2 task-3-report.md fix)
+# Pre-flight: API key + model must be correct
 grep MINIMAX_API_KEY .env     # must NOT be placeholder
 grep LITELLM_MODEL .env       # must be openai/MiniMax-M3
 
-# Reproduce
-timeout 600 uv run python -m alphaquant AAPL --format json 2>&1 | tee /tmp/sub3-blocker1-aapl.log | tail -20
+# Run for 30s and observe (don't wait full 600s — we just want to confirm what blocks first)
+timeout 600 uv run python -m alphaquant AAPL --format json 2>&1 | tee /tmp/sub3-blocker1-aapl-step0.log | tail -20
 ```
 
-Expected output: an `INTERNAL_ERROR` exit with traceback ending in `RuntimeError: cannot schedule new futures after shutdown` from inside `parse_crew_output`.
+**Expected observation** (per the existing log `/tmp/sub3-blocker1-aapl.log`):
+- AAPL hits `flow_timeout ticker=AAPL timeout_seconds=180.0` BEFORE reaching `parse_crew_output`
+- LLM produces `ValuationResult.method="blended"` and `CompetitorAnalysis.method="hybrid"` (now accepted post-`dbfac17`)
+- CrewAI's converter may still raise `ConverterError` for some tasks due to retry-path issues
 
-Then extract the full traceback (the CLI tail truncates it):
-
-```bash
-# Full traceback — search for the line and print 30 lines of context
-grep -n -A 30 "Traceback" /tmp/sub3-blocker1-aapl.log | head -100
-```
-
-Document your findings by appending to `task-3-report.md` (the existing file from sub-2):
+Document in `task-3-report.md` under "Sub-3 Step 0: Blocker reproduction":
 
 ```markdown
-## Sub-3 Step 0: Blocker 1 reproduction (commit <commit-hash>)
+## Sub-3 Step 0 (this run, commit <commit-hash>)
 
-### Exit status
-exit code / signal / stderr tail
+### What actually blocks first
+- [ ] Confirmed: 180s flow_timeout fires before parse_crew_output → Blocker 2 is proximate
+- [ ] Other blockers observed: <list>
 
-### Full traceback (from grep)
-<traceback>
+### LLM output observations
+- ValuationResult.method seen: <list>
+- CompetitorAnalysis.method seen: <list>
+- Other Literal violations: <list>
 
-### Root cause analysis
-<exact line that raises RuntimeError, the asyncio context at that point,
-which futures were already shut down, etc.>
-
-### Confirmed or refuted sub-2 hypothesis
-- [ ] Sub-2 hypothesis: "the Flow's kickoff_with_timeout uses an executor that gets GC'd or torn down before parse_crew_output finishes its work"
-- [ ] Confirmed / Refuted by <evidence>
-
-### Proposed fix direction
-<one paragraph>
+### Blocker 1 (asyncio shutdown race)
+- [ ] Still reproduces? Y/N
+- If N: probably won't manifest after Blocker 2 is fixed — verify in Step 5.5
+- If Y: needs sync kickoff wrap from Steps 6-10
 ```
 
-**Implementation rule:** If the actual root cause is NOT what sub-2's report hypothesized, do NOT proceed with Steps 1-17 as written. Instead, redesign the fix and update the plan. Common alternative root causes:
-- CrewAI's hierarchical manager awaits tasks in a way that closes the event loop before parse_crew_output returns
-- `parse_crew_output` itself calls something async (e.g. `asyncio.run` inside) that conflicts with the calling event loop
-- The Pydantic model serialization in the report writer triggers a deferred coroutine that hits a closed loop
-
-If the reproduction succeeds and the root cause IS what sub-2 hypothesized, proceed to Step 1.
+**Implementation rule:** If Step 0 shows Blocker 2 is NOT the proximate blocker (i.e. `parse_crew_output` IS reached and Blocker 1 actually occurs first), STOP and report — the rest of the plan assumes Blocker 2 first.
 
 ---
 
@@ -999,7 +1002,59 @@ Expected: PASS
 
 Search `tests/test_flow.py` for any test like `test_kickoff_with_timeout_succeeds_under_limit` or `test_flow_times_out_after_seconds`. If it asserts a 180s constant or 180s timeout expectation, change to 600.
 
-#### Step 6: Write failing test for sync kickoff wrap (Blocker 1 fix)
+---
+
+#### Step 5.5: Re-run AAPL with widened timeout + widened Literals — does Blocker 1 still occur?
+
+**NEW step** inserted after Step 0's discovery (commit `dbfac17` evidence in `/tmp/sub3-blocker1-aapl.log`). We can now finally attempt to reproduce Blocker 1 (asyncio shutdown race) because:
+- The timeout has been widened (Step 3) — Blocker 2 won't fire prematurely
+- The Literals have been widened (commit `dbfac17`, pre-Task 3) — LLM output won't fail validation
+
+Run:
+
+```bash
+timeout 600 uv run python -m alphaquant AAPL --format json 2>&1 | tee /tmp/sub3-step5.5-aapl.log | tail -20
+```
+
+**Three possible outcomes**, each with a different code path:
+
+**Outcome A: AAPL succeeds and emits an `InvestmentReport` JSON.**
+
+```bash
+# Confirm: does the output look like a real report?
+cat /tmp/sub3-step5.5-aapl.log | tail -1 | jq '.valuation.dcf_value, .report.rating, .report.confidence'
+```
+
+If yes: Blocker 1 doesn't exist, OR it was already fixed by the timeout widening + Literal widening. **Skip Steps 6-10 entirely** (no `_kickoff_sync` wrap needed). Document and proceed to Step 11.
+
+**Outcome B: AAPL fails with `RuntimeError: cannot schedule new futures after shutdown` in `parse_crew_output`.**
+
+This is the original Blocker 1 hypothesis confirmed. **Proceed with Steps 6-10** (sync kickoff wrap).
+
+**Outcome C: AAPL fails with something else (LLM error, network error, ConverterError without `RuntimeError`, etc.).**
+
+Debug the specific error first; treat as a NEW blocker. Document and STOP — do not proceed with Steps 6-10 (they may not address the actual cause). Possibly need to revise the plan again.
+
+Document in `task-3-report.md` under "Sub-3 Step 5.5: Blocker 1 re-attempt":
+
+```markdown
+## Sub-3 Step 5.5 (commit <commit-hash>)
+
+### Outcome
+A / B / C
+
+### Evidence
+<log excerpt>
+
+### Decision
+- Outcome A: skipped Steps 6-10
+- Outcome B: proceed with Steps 6-10
+- Outcome C: new blocker discovered, see <section>
+```
+
+---
+
+#### Step 6: Write failing test for sync kickoff wrap (Blocker 1 fix — CONDITIONAL on Step 5.5 outcome B)
 
 In `tests/test_flow.py`, **add**:
 
@@ -1025,7 +1080,9 @@ def test_run_crew_uses_kickoff_sync_wrapped_in_to_thread():
 Run: `uv run pytest tests/test_flow.py::test_run_crew_uses_kickoff_sync_wrapped_in_to_thread -v`
 Expected: FAIL — current `run_crew` directly does `asyncio.to_thread(crew.kickoff, inputs=...)` without a sync helper.
 
-#### Step 8: Rewrite `run_crew` to use sync kickoff wrap
+#### Step 8: Rewrite `run_crew` to use sync kickoff wrap (CONDITIONAL on Step 5.5 outcome B)
+
+**Skip this entire step if Step 5.5 produced Outcome A** (AAPL succeeded — Blocker 1 doesn't exist).
 
 In `src/alphaquant/flows/analysis_flow.py`, find the existing `run_crew` method (around line 108-150). **Replace** its entire body with:
 
