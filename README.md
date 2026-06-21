@@ -59,7 +59,7 @@ Docs at http://localhost:8000/docs
 ## Test
 
 ```bash
-uv run pytest -q              # Full suite (179 tests)
+uv run pytest -q              # Full suite (186 tests)
 uv run python -m tests.smoke  # End-to-end smoke test (7 assertions)
 ```
 
@@ -81,7 +81,7 @@ Multi-page UI for browsing reports, tracking history, and comparing tickers.
 ### Local run
 
 ```bash
-uv run streamlit run src/alphaquant/frontend/app.py
+uv run streamlit run src/alphaquant/interfaces/frontend/app.py
 # Open http://localhost:8501
 ```
 
