@@ -13,6 +13,6 @@ class ReportRecord:
     ticker: str
     generated_at: datetime
     rating: str
-    confidence: int
+    confidence: int | None
     market_price: float | None
     report_json: str

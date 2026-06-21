@@ -17,13 +17,54 @@ CREATE TABLE IF NOT EXISTS reports (
     ticker TEXT NOT NULL,
     generated_at TEXT NOT NULL,
     rating TEXT NOT NULL,
-    confidence INTEGER NOT NULL,
+    confidence INTEGER,
     market_price REAL,
     report_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_ticker ON reports(ticker);
 CREATE INDEX IF NOT EXISTS idx_reports_generated_at ON reports(generated_at);
 """
+
+# Migration for DBs created before confidence became nullable. SQLite >=3.35
+# supports ALTER TABLE ... ALTER COLUMN ... DROP NOT NULL; fall back to
+# table-rebuild for older versions.
+_MIGRATION_V2 = "ALTER TABLE reports ALTER COLUMN confidence DROP NOT NULL;"
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    """Run additive migrations idempotently."""
+    cur = conn.execute("PRAGMA user_version")
+    version = int(cur.fetchone()[0])
+    if version < 2:
+        try:
+            conn.execute(_MIGRATION_V2)
+            conn.execute("PRAGMA user_version = 2")
+        except sqlite3.OperationalError:
+            # Older SQLite: table-rebuild fallback.
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS reports_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker TEXT NOT NULL,
+                    generated_at TEXT NOT NULL,
+                    rating TEXT NOT NULL,
+                    confidence INTEGER,
+                    market_price REAL,
+                    report_json TEXT NOT NULL
+                );
+                INSERT INTO reports_new
+                    SELECT id, ticker, generated_at, rating, confidence,
+                           market_price, report_json FROM reports;
+                DROP TABLE reports;
+                ALTER TABLE reports_new RENAME TO reports;
+                CREATE INDEX IF NOT EXISTS idx_reports_ticker
+                    ON reports(ticker);
+                CREATE INDEX IF NOT EXISTS idx_reports_generated_at
+                    ON reports(generated_at);
+                PRAGMA user_version = 2;
+                """
+            )
+        conn.commit()
 
 
 class DB:
@@ -39,9 +80,10 @@ class DB:
         return conn
 
     def init(self) -> None:
-        """Create reports table and indexes if absent."""
+        """Create reports table and indexes if absent, then run migrations."""
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            _apply_migrations(conn)
             conn.commit()
 
     def insert_report(self, ticker: str, report: InvestmentReport) -> int:
@@ -132,7 +174,9 @@ class DB:
             ticker=row["ticker"],
             generated_at=datetime.fromisoformat(row["generated_at"]),
             rating=row["rating"],
-            confidence=int(row["confidence"]),
+            confidence=(
+                int(row["confidence"]) if row["confidence"] is not None else None
+            ),
             market_price=(
                 float(row["market_price"]) if row["market_price"] is not None else None
             ),

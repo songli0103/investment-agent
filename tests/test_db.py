@@ -292,3 +292,164 @@ def test_concurrent_inserts(db: DB) -> None:
     # Order is chronological (by generated_at then id).
     generated = [r.generated_at for r in history]
     assert generated == sorted(generated)
+
+
+class TestNullableConfidence:
+    def test_insert_and_read_with_null_confidence(self, tmp_path):
+        """Sub-plan: confidence can be null in InvestmentReport -> DB -> row."""
+        db_path = tmp_path / "null_conf.db"
+        db = DB(db_path)
+        db.init()
+        # Build a minimal but valid report with confidence=None
+        rep = InvestmentReport(
+            report_id="00000000-0000-0000-0000-000000000001",
+            ticker="TEST",
+            generated_at=datetime(2024, 1, 1),
+            company=Company(
+                ticker="TEST",
+                name="Test Inc.",
+                exchange="NASDAQ",
+                sector="Technology",
+                industry="Software",
+                market_cap=1_000_000_000,
+            ),
+            market=MarketData(
+                ticker="TEST",
+                as_of=datetime(2024, 1, 1),
+                price=Decimal("100.00"),
+                change_pct=0.0,
+                volume=1_000_000,
+                market_cap=1_000_000_000,
+                pe_ratio=20.0,
+                beta=1.0,
+            ),
+            financial=FinancialStatements(ticker="TEST"),
+            financial_health_score=50,
+            news=NewsAnalysis(
+                ticker="TEST",
+                as_of=datetime(2024, 1, 1),
+                total_count=0,
+                positive_pct=0.0,
+                negative_pct=0.0,
+                neutral_pct=1.0,
+                sentiment_score=0.0,
+            ),
+            competitors=CompetitorAnalysis(
+                target_ticker="TEST",
+                competitors=[
+                    Competitor(
+                        ticker="OTHER",
+                        name="Other Inc.",
+                        market_cap=500_000_000,
+                        revenue_ttm=Decimal("100000000"),
+                    )
+                ],
+                industry_rank=1,
+                industry_size=1,
+                competitive_score=50,
+            ),
+            risk=RiskAssessment(
+                ticker="TEST",
+                total_score=50,
+                level="medium",
+                sub_scores=[
+                    RiskScore(
+                        category="market",
+                        score=50,
+                        rationale="Default neutral market risk placeholder",
+                    )
+                ],
+                top_risks=["Default neutral market risk placeholder"],
+            ),
+            valuation=ValuationResult(
+                ticker="TEST",
+                current_price=Decimal("100.00"),
+                upside_pct=0.0,
+            ),
+            rating="Hold",
+            confidence=None,  # <-- the change under test
+            markdown="x",
+        )
+        new_id = db.insert_report("TEST", rep)
+        rows = db.get_history()
+        assert len(rows) == 1
+        assert rows[0].id == new_id
+        assert rows[0].confidence is None
+
+    def test_insert_and_read_with_numeric_confidence(self, tmp_path):
+        """Regression: numeric confidence still round-trips."""
+        db_path = tmp_path / "num_conf.db"
+        db = DB(db_path)
+        db.init()
+        rep = InvestmentReport(
+            report_id="00000000-0000-0000-0000-000000000002",
+            ticker="TEST",
+            generated_at=datetime(2024, 1, 1),
+            company=Company(
+                ticker="TEST",
+                name="Test Inc.",
+                exchange="NASDAQ",
+                sector="Technology",
+                industry="Software",
+                market_cap=1_000_000_000,
+            ),
+            market=MarketData(
+                ticker="TEST",
+                as_of=datetime(2024, 1, 1),
+                price=Decimal("100.00"),
+                change_pct=0.0,
+                volume=1_000_000,
+                market_cap=1_000_000_000,
+                pe_ratio=20.0,
+                beta=1.0,
+            ),
+            financial=FinancialStatements(ticker="TEST"),
+            financial_health_score=50,
+            news=NewsAnalysis(
+                ticker="TEST",
+                as_of=datetime(2024, 1, 1),
+                total_count=0,
+                positive_pct=0.0,
+                negative_pct=0.0,
+                neutral_pct=1.0,
+                sentiment_score=0.0,
+            ),
+            competitors=CompetitorAnalysis(
+                target_ticker="TEST",
+                competitors=[
+                    Competitor(
+                        ticker="OTHER",
+                        name="Other Inc.",
+                        market_cap=500_000_000,
+                        revenue_ttm=Decimal("100000000"),
+                    )
+                ],
+                industry_rank=1,
+                industry_size=1,
+                competitive_score=50,
+            ),
+            risk=RiskAssessment(
+                ticker="TEST",
+                total_score=50,
+                level="medium",
+                sub_scores=[
+                    RiskScore(
+                        category="market",
+                        score=50,
+                        rationale="Default neutral market risk placeholder",
+                    )
+                ],
+                top_risks=["Default neutral market risk placeholder"],
+            ),
+            valuation=ValuationResult(
+                ticker="TEST",
+                current_price=Decimal("100.00"),
+                upside_pct=0.0,
+            ),
+            rating="Hold",
+            confidence=80,
+            markdown="x",
+        )
+        db.insert_report("TEST", rep)
+        rows = db.get_history()
+        assert rows[0].confidence == 80
