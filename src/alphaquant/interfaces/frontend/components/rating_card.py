@@ -29,7 +29,7 @@ def render_rating_card(report: InvestmentReport) -> None:
     """Render a large colored rating card with rating, confidence, ticker, and date."""
     rating = report.rating
     color = RATING_COLORS.get(rating, _DEFAULT_COLOR)
-    confidence = report.confidence
+    confidence = report.confidence if report.confidence is not None else "N/A"
     ticker = report.ticker
     generated_at = _format_date(report.generated_at)
 
@@ -52,7 +52,7 @@ def render_rating_card(report: InvestmentReport) -> None:
         <div style="text-align:right;">
           <div style="font-size: 0.85rem; opacity: 0.9; letter-spacing: 0.05em;">CONFIDENCE</div>
           <div style="font-size: 2.0rem; font-weight: 600; line-height: 1.1; margin-top: 4px;">
-            {confidence}%
+            {confidence}{"%" if isinstance(confidence, int) else ""}
           </div>
         </div>
       </div>

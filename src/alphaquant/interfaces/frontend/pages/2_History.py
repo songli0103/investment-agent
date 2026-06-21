@@ -80,7 +80,7 @@ records = [
         ticker=row["ticker"],
         generated_at=row["generated_at"],
         rating=row["rating"],
-        confidence=int(row["confidence"]),
+        confidence=(int(row["confidence"]) if row["confidence"] is not None else None),
         market_price=(
             float(row["market_price"]) if row["market_price"] is not None else None
         ),

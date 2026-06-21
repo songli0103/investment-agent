@@ -218,7 +218,7 @@ metrics_display["P/E"] = metrics_display["P/E"].apply(
     lambda v: f"{v:.2f}" if v is not None else "—"
 )
 metrics_display["Confidence"] = metrics_display["Confidence"].apply(
-    lambda v: f"{int(v)}%"
+    lambda v: f"{int(v)}%" if v is not None else "—"
 )
 st.dataframe(metrics_display, use_container_width=True)
 
@@ -229,9 +229,15 @@ st.plotly_chart(_build_overlay_radar(successful), use_container_width=True)
 # Verdict: best rating (highest RATING_TO_NUMERIC) and highest confidence.
 best_rating_ticker = max(
     successful,
-    key=lambda r: (RATING_TO_NUMERIC.get(r.rating, 0), r.confidence),
+    key=lambda r: (
+        RATING_TO_NUMERIC.get(r.rating, 0),
+        r.confidence if r.confidence is not None else -1,
+    ),
 ).ticker
-best_confidence_ticker = max(successful, key=lambda r: r.confidence).ticker
+best_confidence_ticker = max(
+    successful,
+    key=lambda r: (r.confidence if r.confidence is not None else -1),
+).ticker
 
 st.subheader("Verdict")
 st.write(f"**Best rating:** {best_rating_ticker}")
