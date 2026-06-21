@@ -72,6 +72,8 @@ Data sources (fallback chain): Yahoo Finance → Alpha Vantage → Finnhub → S
 
 LLM: MiniMax-M3 via LiteLLM.
 
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full module map and data flow.
+
 ## Frontend (Streamlit)
 
 Multi-page UI for browsing reports, tracking history, and comparing tickers.
