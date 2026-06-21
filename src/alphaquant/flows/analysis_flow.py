@@ -1,20 +1,21 @@
-"""AnalysisFlow: thin shell wrapping the AnalysisCrew (sub-project 1).
+"""AnalysisFlow: thin shell wrapping the AnalysisCrew.
 
-The deterministic 6-step Flow has been collapsed into two steps:
+Two-step Flow:
 
-1. ``run_crew`` (``@start``) — pre-fetch all 4 raw data sources via
-   :class:`DataSourceRegistry`, invoke :class:`AnalysisCrew.kickoff` inside
-   :func:`asyncio.to_thread` with a per-step timeout, then dispatch to
-   :func:`parse_crew_output` to fill the downstream state fields.
-2. ``synthesize_report`` (``@listen(run_crew)``) — assemble the
+1. ``run_crew`` (``@start``) — invokes :class:`AnalysisCrew.kickoff` inside
+   :func:`asyncio.to_thread` with a per-step timeout, then dispatches to
+   :func:`parse_crew_output` to fill the downstream state fields. The 4 data
+   agents fetch their own data inside the Crew via tools (sub-project 2);
+   the Flow no longer pre-fetches.
+2. ``synthesize_report`` (``@listen(run_crew)``) — assembles the
    :class:`InvestmentReport` from the populated state.
 
-Sub-project 1 keeps the crew as a structural shell. Agents run end-to-end
-but their JSON outputs are normalized by ``parse_crew_output`` so the
-existing deterministic fallback logic still drives competitor / risk /
-valuation sub-scores. The visible result is byte-for-byte identical to the
-pre-refactor Flow. Sub-project 3+ will let agents produce real structured
-outputs and gradually remove the fallback paths.
+Sub-project 1 kept the crew as a structural shell. Sub-project 2 makes the
+4 data agents fetch data via their own tools, removes Flow pre-fetch, and
+extends ``parse_crew_output`` to populate company/market/news/financial from
+agent task outputs. Competitor/risk/valuation still use the deterministic
+fallback; sub-project 3 will let those agents produce real structured
+outputs and remove the fallback paths.
 """
 from __future__ import annotations
 
