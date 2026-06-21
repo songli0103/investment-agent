@@ -30,7 +30,7 @@ class InvestmentReport(BaseModel):
     risk: RiskAssessment
     valuation: ValuationResult
     rating: Literal["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
-    confidence: int = Field(..., ge=0, le=100)
+    confidence: int | None = Field(None, ge=0, le=100)
     investment_horizon: Literal["short", "medium", "long"] = "medium"
     catalysts: list[str] = Field(default_factory=list)
     markdown: str = Field(..., min_length=1)
