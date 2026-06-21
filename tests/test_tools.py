@@ -142,6 +142,24 @@ class TestMarketDataTool:
         assert "Error fetching market data" in result
         assert "boom" in result
 
+    def test_no_empty_shell_on_unexpected_exception(self):
+        """Sub-3 Blocker 3: tool must NOT return an empty dict on unexpected exception.
+
+        Returns an 'Error fetching market data: <ExceptionType>: <message>' string,
+        which parse_crew_output's error-string detector already handles as failure.
+        """
+        class FakeRegistry:
+            async def get_market(self, ticker):
+                raise RuntimeError("network glitch")
+
+        with patch("alphaquant.tools.market_data_tool.DataSourceRegistry", FakeRegistry):
+            result = MarketDataTool()._run("AAPL")
+
+        # Must be an error string with exception type, NOT an empty dict or shell
+        assert result.startswith("Error fetching market data"), f"expected error prefix, got: {result!r}"
+        assert "RuntimeError" in result, f"expected exception type in message, got: {result!r}"
+        assert "network glitch" in result, f"expected original message, got: {result!r}"
+
 
 # ---------------------------------------------------------------------------
 # NewsTool: wraps DataSourceRegistry.get_news
@@ -212,6 +230,19 @@ class TestNewsTool:
 
         assert "Error fetching news" in result
         assert "net down" in result
+
+    def test_no_empty_shell_on_unexpected_exception(self):
+        """Sub-3 Blocker 3: tool must NOT return an empty list on unexpected exception."""
+        class FakeRegistry:
+            async def get_news(self, ticker, days=30):
+                raise RuntimeError("network glitch")
+
+        with patch("alphaquant.tools.news_tool.DataSourceRegistry", FakeRegistry):
+            result = NewsTool()._run("AAPL")
+
+        assert result.startswith("Error fetching news"), f"expected error prefix, got: {result!r}"
+        assert "RuntimeError" in result, f"expected exception type in message, got: {result!r}"
+        assert "network glitch" in result, f"expected original message, got: {result!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +319,19 @@ class TestFinancialTool:
 
         assert "Error fetching financials" in result
 
+    def test_no_empty_shell_on_unexpected_exception(self):
+        """Sub-3 Blocker 3: tool must NOT return an empty dict on unexpected exception."""
+        class FakeRegistry:
+            async def get_financial(self, ticker):
+                raise RuntimeError("network glitch")
+
+        with patch("alphaquant.tools.financial_tool.DataSourceRegistry", FakeRegistry):
+            result = FinancialTool()._run("AAPL")
+
+        assert result.startswith("Error fetching financials"), f"expected error prefix, got: {result!r}"
+        assert "RuntimeError" in result, f"expected exception type in message, got: {result!r}"
+        assert "network glitch" in result, f"expected original message, got: {result!r}"
+
 
 # ---------------------------------------------------------------------------
 # CompanyLookupTool: wraps DataSourceRegistry.get_company
@@ -342,6 +386,19 @@ class TestCompanyLookupTool:
 
         assert "Error fetching company" in result
         assert "net down" in result
+
+    def test_no_empty_shell_on_unexpected_exception(self):
+        """Sub-3 Blocker 3: tool must NOT return an empty dict on unexpected exception."""
+        class FakeRegistry:
+            async def get_company(self, ticker):
+                raise RuntimeError("network glitch")
+
+        with patch("alphaquant.tools.company_lookup_tool.DataSourceRegistry", FakeRegistry):
+            result = CompanyLookupTool()._run("AAPL")
+
+        assert result.startswith("Error fetching company"), f"expected error prefix, got: {result!r}"
+        assert "RuntimeError" in result, f"expected exception type in message, got: {result!r}"
+        assert "network glitch" in result, f"expected original message, got: {result!r}"
 
     def test_timeout_returns_error_message(self):
         """If get_company exceeds 30s, tool returns timeout error string."""

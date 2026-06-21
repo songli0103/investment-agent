@@ -41,7 +41,9 @@ class CompanyLookupTool(BaseTool):
             return f"Error fetching company: timeout after {TOOL_TIMEOUT_SECONDS}s"
         except Exception as e:
             # AllDataSourcesDown, network errors, validation errors, etc.
-            return f"Error fetching company: {e}"
+            # Sub-3 Blocker 3: include exception type for diagnosability;
+            # parse_crew_output's error-string detector still catches this prefix.
+            return f"Error fetching company: {type(e).__name__}: {e}"
         if not company:
             return f"No company data available for {ticker}"
         return company.model_dump_json(indent=2)

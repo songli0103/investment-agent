@@ -31,7 +31,9 @@ class FinancialTool(BaseTool):
         except asyncio.TimeoutError:
             return f"Error fetching financials: timeout after {TOOL_TIMEOUT_SECONDS}s"
         except Exception as e:
-            return f"Error fetching financials: {e}"
+            # Sub-3 Blocker 3: include exception type for diagnosability;
+            # parse_crew_output's error-string detector still catches this prefix.
+            return f"Error fetching financials: {type(e).__name__}: {e}"
         if not statements:
             return f"No financial data available for {ticker}"
         return statements.model_dump_json(indent=2)

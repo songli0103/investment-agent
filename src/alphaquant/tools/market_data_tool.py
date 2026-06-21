@@ -36,7 +36,9 @@ class MarketDataTool(BaseTool):
         except asyncio.TimeoutError:
             return f"Error fetching market data: timeout after {TOOL_TIMEOUT_SECONDS}s"
         except Exception as e:
-            return f"Error fetching market data: {e}"
+            # Sub-3 Blocker 3: include exception type for diagnosability;
+            # parse_crew_output's error-string detector still catches this prefix.
+            return f"Error fetching market data: {type(e).__name__}: {e}"
         if not market:
             return f"No market data available for {ticker}"
         return market.model_dump_json(indent=2)

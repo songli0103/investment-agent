@@ -31,7 +31,9 @@ class NewsTool(BaseTool):
         except asyncio.TimeoutError:
             return f"Error fetching news: timeout after {TOOL_TIMEOUT_SECONDS}s"
         except Exception as e:
-            return f"Error fetching news: {e}"
+            # Sub-3 Blocker 3: include exception type for diagnosability;
+            # parse_crew_output's error-string detector still catches this prefix.
+            return f"Error fetching news: {type(e).__name__}: {e}"
         if not news:
             return f"No news found for {ticker}"
         import json
