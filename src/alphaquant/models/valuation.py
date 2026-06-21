@@ -14,5 +14,7 @@ class ValuationResult(BaseModel):
     dcf_value: Decimal | None = None
     relative_value: Decimal | None = None
     peg_ratio: float | None = None
-    method: Literal["dcf_relative_peg", "relative_only"] = "dcf_relative_peg"
+    method: Literal[
+        "dcf_relative_peg", "relative_only", "blended", "dcf_only", "relative", "dcf_relative_blended"
+    ] = "dcf_relative_peg"
     assumptions: dict[str, Any] = Field(default_factory=dict)

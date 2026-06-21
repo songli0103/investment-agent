@@ -26,4 +26,6 @@ class CompetitorAnalysis(BaseModel):
     competitive_score: int = Field(..., ge=0, le=100)
     strengths: list[str] = Field(default_factory=list)
     weaknesses: list[str] = Field(default_factory=list)
-    method: Literal["gics", "keyword", "manual", "fallback"] = "gics"
+    method: Literal[
+        "gics", "keyword", "manual", "fallback", "hybrid", "multi_factor", "peer_comparison"
+    ] = "gics"
