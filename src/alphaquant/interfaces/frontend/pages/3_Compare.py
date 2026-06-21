@@ -23,12 +23,12 @@ from alphaquant.exceptions import (
     InvalidTickerFormat,
     TickerNotFound,
 )
-from alphaquant.frontend.components.charts import (
+from alphaquant.interfaces.frontend.components.charts import (
     RADAR_AXES,
     RATING_TO_NUMERIC,
     _risk_axis_value,
 )
-from alphaquant.frontend.components.rating_card import render_rating_card
+from alphaquant.interfaces.frontend.components.rating_card import render_rating_card
 from alphaquant.infrastructure.persistence import DB
 from alphaquant.main import run_analysis_async
 from alphaquant.models.report import InvestmentReport

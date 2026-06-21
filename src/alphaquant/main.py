@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from alphaquant.api.routes import router
+from alphaquant.interfaces.api.routes import router
 from alphaquant.observability import configure_logging, get_logger
 
 # Configure structured logging once at import time. Idempotent under

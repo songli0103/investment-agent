@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta
 import pandas as pd
 import streamlit as st
 
-from alphaquant.frontend.components.charts import render_history_lines
+from alphaquant.interfaces.frontend.components.charts import render_history_lines
 from alphaquant.infrastructure.persistence import DB
 
 

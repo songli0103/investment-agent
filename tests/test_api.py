@@ -26,7 +26,7 @@ os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 from fastapi.testclient import TestClient
 
-from alphaquant.api.schemas import (
+from alphaquant.interfaces.api.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     HealthResponse,
@@ -190,10 +190,10 @@ def test_analyze_request_schema_rejects_bad_ticker():
 
 def test_analyze_endpoint_returns_report_on_success():
     report = _sample_report()
-    from alphaquant.api import rate_limiter
+    from alphaquant.interfaces.api import rate_limiter
 
     rate_limiter.reset_rate_limiter()
-    with patch("alphaquant.api.routes.run_analysis_async", return_value=report) as mock:
+    with patch("alphaquant.interfaces.api.routes.run_analysis_async", return_value=report) as mock:
         resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
 
     assert resp.status_code == 200
@@ -205,10 +205,10 @@ def test_analyze_endpoint_returns_report_on_success():
 
 
 def test_analyze_endpoint_maps_invalid_ticker_to_400():
-    from alphaquant.api import rate_limiter
+    from alphaquant.interfaces.api import rate_limiter
 
     rate_limiter.reset_rate_limiter()
-    with patch("alphaquant.api.routes.run_analysis_async", side_effect=InvalidTickerFormat("XYZ")):
+    with patch("alphaquant.interfaces.api.routes.run_analysis_async", side_effect=InvalidTickerFormat("XYZ")):
         resp = client.post("/api/v1/analyze", json={"ticker": "XYZ"})
 
     assert resp.status_code == 400
@@ -216,10 +216,10 @@ def test_analyze_endpoint_maps_invalid_ticker_to_400():
 
 
 def test_analyze_endpoint_maps_ticker_not_found_to_404():
-    from alphaquant.api import rate_limiter
+    from alphaquant.interfaces.api import rate_limiter
 
     rate_limiter.reset_rate_limiter()
-    with patch("alphaquant.api.routes.run_analysis_async", side_effect=TickerNotFound("ZZZZ")):
+    with patch("alphaquant.interfaces.api.routes.run_analysis_async", side_effect=TickerNotFound("ZZZZ")):
         resp = client.post("/api/v1/analyze", json={"ticker": "ZZZZ"})
 
     assert resp.status_code == 404
@@ -227,11 +227,11 @@ def test_analyze_endpoint_maps_ticker_not_found_to_404():
 
 
 def test_analyze_endpoint_maps_all_sources_down_to_503():
-    from alphaquant.api import rate_limiter
+    from alphaquant.interfaces.api import rate_limiter
 
     rate_limiter.reset_rate_limiter()
     with patch(
-        "alphaquant.api.routes.run_analysis_async",
+        "alphaquant.interfaces.api.routes.run_analysis_async",
         side_effect=AllDataSourcesDown("everything is down"),
     ):
         resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
@@ -245,11 +245,11 @@ def test_analyze_endpoint_returns_500_when_no_report():
     AllDataSourcesDown, which the route maps to 503. (The Flow itself is
     responsible for synthesizing a report; an empty result means the synthesis
     step failed.)"""
-    from alphaquant.api import rate_limiter
+    from alphaquant.interfaces.api import rate_limiter
 
     rate_limiter.reset_rate_limiter()
     with patch(
-        "alphaquant.api.routes.run_analysis_async",
+        "alphaquant.interfaces.api.routes.run_analysis_async",
         side_effect=AllDataSourcesDown("Flow produced no report for AAPL"),
     ):
         resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
@@ -261,11 +261,11 @@ def test_analyze_endpoint_returns_500_when_no_report():
 def test_analyze_endpoint_maps_report_generation_error_to_500():
     """ReportGenerationError (raised by the Flow's write_report step on synthesis
     failure) maps to HTTP 500 per spec §5.2."""
-    from alphaquant.api import rate_limiter
+    from alphaquant.interfaces.api import rate_limiter
 
     rate_limiter.reset_rate_limiter()
     with patch(
-        "alphaquant.api.routes.run_analysis_async",
+        "alphaquant.interfaces.api.routes.run_analysis_async",
         side_effect=ReportGenerationError("synthesis blew up"),
     ):
         resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
@@ -277,11 +277,11 @@ def test_analyze_endpoint_maps_report_generation_error_to_500():
 def test_analyze_endpoint_maps_asyncio_timeout_to_504():
     """asyncio.TimeoutError (propagated when the 120s Flow budget is exceeded)
     maps to HTTP 504 per spec §5.2."""
-    from alphaquant.api import rate_limiter
+    from alphaquant.interfaces.api import rate_limiter
 
     rate_limiter.reset_rate_limiter()
     with patch(
-        "alphaquant.api.routes.run_analysis_async",
+        "alphaquant.interfaces.api.routes.run_analysis_async",
         side_effect=asyncio.TimeoutError(),
     ):
         resp = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
@@ -292,10 +292,10 @@ def test_analyze_endpoint_maps_asyncio_timeout_to_504():
 
 def test_rate_limiter_returns_429_after_burst():
     """The token bucket allows 10 req/min per IP; the 11th request 429s."""
-    from alphaquant.api import rate_limiter
+    from alphaquant.interfaces.api import rate_limiter
 
     rate_limiter.reset_rate_limiter()
-    with patch("alphaquant.api.routes.run_analysis_async", return_value=_sample_report()):
+    with patch("alphaquant.interfaces.api.routes.run_analysis_async", return_value=_sample_report()):
         for _ in range(10):
             ok = client.post("/api/v1/analyze", json={"ticker": "AAPL"})
             assert ok.status_code == 200
@@ -308,7 +308,7 @@ def test_rate_limiter_resets_between_clients():
     """The bucket is keyed by client IP; one client exhausting their quota
     should not affect another. (TestClient uses a single IP, so we exercise
     the underlying limiter directly with two distinct keys.)"""
-    from alphaquant.api.rate_limiter import TokenBucketRateLimiter
+    from alphaquant.interfaces.api.rate_limiter import TokenBucketRateLimiter
 
     limiter = TokenBucketRateLimiter(capacity=2)
     limiter.consume("client-a")
@@ -395,7 +395,7 @@ def test_run_analysis_sync_wrapper():
 
 
 def test_cli_usage_errors_when_no_ticker(capsys):
-    from alphaquant.cli import main
+    from alphaquant.interfaces.cli import main
 
     # Force an empty argv so argparse's "ticker required" branch fires,
     # independent of any sys.argv leaked from prior tests.
@@ -406,7 +406,7 @@ def test_cli_usage_errors_when_no_ticker(capsys):
 
 
 def test_cli_exit_code_for_invalid_ticker_format(capsys):
-    with patch("alphaquant.cli.run_analysis", side_effect=InvalidTickerFormat("bad!")):
+    with patch("alphaquant.interfaces.cli.run_analysis", side_effect=InvalidTickerFormat("bad!")):
         code = _run_cli(["AAPL"])
     assert code == 2
     err = capsys.readouterr().err
@@ -415,7 +415,7 @@ def test_cli_exit_code_for_invalid_ticker_format(capsys):
 
 
 def test_cli_exit_code_for_ticker_not_found(capsys):
-    with patch("alphaquant.cli.run_analysis", side_effect=TickerNotFound("ZZZZ")):
+    with patch("alphaquant.interfaces.cli.run_analysis", side_effect=TickerNotFound("ZZZZ")):
         code = _run_cli(["ZZZZ"])
     assert code == 3
     payload = json.loads(capsys.readouterr().err.strip())
@@ -424,7 +424,7 @@ def test_cli_exit_code_for_ticker_not_found(capsys):
 
 def test_cli_exit_code_for_all_data_sources_down(capsys):
     with patch(
-        "alphaquant.cli.run_analysis",
+        "alphaquant.interfaces.cli.run_analysis",
         side_effect=AllDataSourcesDown("nope"),
     ):
         code = _run_cli(["AAPL"])
@@ -434,7 +434,7 @@ def test_cli_exit_code_for_all_data_sources_down(capsys):
 
 
 def test_cli_exit_code_for_unexpected_error(capsys):
-    with patch("alphaquant.cli.run_analysis", side_effect=RuntimeError("boom")):
+    with patch("alphaquant.interfaces.cli.run_analysis", side_effect=RuntimeError("boom")):
         code = _run_cli(["AAPL"])
     assert code == 1
     payload = json.loads(capsys.readouterr().err.strip())
@@ -443,7 +443,7 @@ def test_cli_exit_code_for_unexpected_error(capsys):
 
 def test_cli_writes_json_report_to_stdout(capsys):
     report = _sample_report()
-    with patch("alphaquant.cli.run_analysis", return_value=report):
+    with patch("alphaquant.interfaces.cli.run_analysis", return_value=report):
         code = _run_cli(["AAPL"])
     assert code == 0
     out = capsys.readouterr().out
@@ -455,7 +455,7 @@ def test_cli_writes_json_report_to_stdout(capsys):
 
 def test_cli_pretty_flag_produces_indented_output(capsys):
     report = _sample_report()
-    with patch("alphaquant.cli.run_analysis", return_value=report):
+    with patch("alphaquant.interfaces.cli.run_analysis", return_value=report):
         code = _run_cli(["AAPL", "--pretty"])
     assert code == 0
     out = capsys.readouterr().out
@@ -467,7 +467,7 @@ def test_cli_pretty_flag_produces_indented_output(capsys):
 
 def test_cli_markdown_format(capsys):
     report = _sample_report()
-    with patch("alphaquant.cli.run_analysis", return_value=report):
+    with patch("alphaquant.interfaces.cli.run_analysis", return_value=report):
         code = _run_cli(["AAPL", "--format", "markdown"])
     assert code == 0
     out = capsys.readouterr().out
@@ -478,7 +478,7 @@ def test_cli_markdown_format(capsys):
 def test_cli_output_flag_writes_to_file(capsys, tmp_path):
     report = _sample_report()
     out_file = tmp_path / "report.json"
-    with patch("alphaquant.cli.run_analysis", return_value=report):
+    with patch("alphaquant.interfaces.cli.run_analysis", return_value=report):
         code = _run_cli(["AAPL", "--output", str(out_file)])
     assert code == 0
     body = json.loads(out_file.read_text())
@@ -496,7 +496,7 @@ def _run_cli(argv: list[str]) -> int:
     """Invoke CLI main() with the given argv, bypassing argparse's sys.argv."""
     import sys
 
-    from alphaquant.cli import main
+    from alphaquant.interfaces.cli import main
 
     with patch.object(sys, "argv", ["alphaquant", *argv]):
         return main()

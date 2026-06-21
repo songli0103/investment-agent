@@ -5,8 +5,8 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from alphaquant.api.rate_limiter import rate_limit_analyze
-from alphaquant.api.schemas import AnalyzeRequest, AnalyzeResponse, HealthResponse
+from alphaquant.interfaces.api.rate_limiter import rate_limit_analyze
+from alphaquant.interfaces.api.schemas import AnalyzeRequest, AnalyzeResponse, HealthResponse
 from alphaquant.exceptions import (
     AllDataSourcesDown,
     InvalidTickerFormat,

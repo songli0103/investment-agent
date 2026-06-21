@@ -10,12 +10,12 @@ from alphaquant.exceptions import (
     InvalidTickerFormat,
     TickerNotFound,
 )
-from alphaquant.frontend.components.charts import (
+from alphaquant.interfaces.frontend.components.charts import (
     render_risk_radar,
     render_sentiment_bar,
 )
-from alphaquant.frontend.components.metrics_panel import render_metrics_panel
-from alphaquant.frontend.components.rating_card import render_rating_card
+from alphaquant.interfaces.frontend.components.metrics_panel import render_metrics_panel
+from alphaquant.interfaces.frontend.components.rating_card import render_rating_card
 from alphaquant.infrastructure.persistence import DB
 from alphaquant.main import run_analysis_async
 
