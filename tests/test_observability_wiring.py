@@ -250,61 +250,146 @@ def test_run_analysis_async_emits_no_report_event(captured_logs):
 
 
 def test_flow_emits_step_started_and_completed(captured_logs):
-    """Running a single Flow step emits started + completed events."""
+    """Running the run_crew step emits started + completed events."""
     from alphaquant.flows.analysis_flow import AnalysisFlow
+    from alphaquant.models.company import Company
+    from alphaquant.models.market import MarketData
+    from alphaquant.models.financial import FinancialStatements
+    from alphaquant.models.news import NewsAnalysis
 
     flow = AnalysisFlow()
     flow.state.ticker = "AAPL"
 
-    # Build a minimal competitor analysis that takes the GICS-fallback path
-    # (company is None → no real peers).
-    asyncio.run(flow.competitor_analysis())
+    fake_company = Company(
+        ticker="AAPL",
+        name="Apple Inc.",
+        exchange="NASDAQ",
+        sector="Technology",
+        industry="Consumer Electronics",
+        market_cap=3_000_000_000_000,
+    )
+    fake_market = MarketData(
+        ticker="AAPL",
+        as_of=datetime(2026, 6, 20),
+        price=Decimal("150.00"),
+        change_pct=0.5,
+        volume=0,
+        market_cap=3_000_000_000_000,
+        source="yahoo",
+    )
+    fake_financial = FinancialStatements(ticker="AAPL")
+    fake_news = NewsAnalysis.empty("AAPL")
+
+    async def _get_company(_t):
+        return fake_company
+
+    async def _get_market(_t):
+        return fake_market
+
+    async def _get_news(_t):
+        return fake_news
+
+    async def _get_financial(_t):
+        return fake_financial
+
+    fake_registry = type("R", (), {})()
+    fake_registry.get_company = _get_company
+    fake_registry.get_market = _get_market
+    fake_registry.get_news = _get_news
+    fake_registry.get_financial = _get_financial
+
+    fake_crew = type("C", (), {})()
+    fake_crew.kickoff = lambda inputs: type("O", (), {"tasks_output": []})()
+
+    with patch("alphaquant.flows.analysis_flow.DataSourceRegistry", return_value=fake_registry), \
+         patch("alphaquant.flows.analysis_flow.AnalysisCrew", return_value=fake_crew):
+        asyncio.run(flow.run_crew("AAPL"))
 
     events = [r["event"] for r in captured_logs]
     assert "flow_step_started" in events
     assert "flow_step_completed" in events
 
-    # At least one started + one completed should mention competitor_analysis
     started_steps = [
         r.get("step") for r in captured_logs if r["event"] == "flow_step_started"
     ]
     completed_steps = [
         r.get("step") for r in captured_logs if r["event"] == "flow_step_completed"
     ]
-    assert "competitor_analysis" in started_steps
-    assert "competitor_analysis" in completed_steps
+    assert "run_crew" in started_steps
+    assert "run_crew" in completed_steps
 
 
-def test_flow_resolve_company_logs_started_completed(captured_logs):
-    """resolve_company emits started, then completed on success."""
+def test_flow_run_crew_logs_started_completed(captured_logs):
+    """run_crew emits started, then completed on success."""
     from alphaquant.flows.analysis_flow import AnalysisFlow
+    from alphaquant.models.company import Company
+    from alphaquant.models.market import MarketData
+    from alphaquant.models.financial import FinancialStatements
+    from alphaquant.models.news import NewsAnalysis
 
-    class _FakeCompany:
-        name = "Apple Inc."
-        ticker = "AAPL"
+    fake_company = Company(
+        ticker="AAPL",
+        name="Apple Inc.",
+        exchange="NASDAQ",
+        sector="Technology",
+        industry="Consumer Electronics",
+        market_cap=3_000_000_000_000,
+    )
+    fake_market = MarketData(
+        ticker="AAPL",
+        as_of=datetime(2026, 6, 20),
+        price=Decimal("150.00"),
+        change_pct=0.5,
+        volume=0,
+        market_cap=3_000_000_000_000,
+        source="yahoo",
+    )
+    fake_financial = FinancialStatements(ticker="AAPL")
+    fake_news = NewsAnalysis.empty("AAPL")
+
+    async def _get_company(_t):
+        return fake_company
+
+    async def _get_market(_t):
+        return fake_market
+
+    async def _get_news(_t):
+        return fake_news
+
+    async def _get_financial(_t):
+        return fake_financial
+
+    fake_registry = type("R", (), {})()
+    fake_registry.get_company = _get_company
+    fake_registry.get_market = _get_market
+    fake_registry.get_news = _get_news
+    fake_registry.get_financial = _get_financial
+
+    fake_crew = type("C", (), {})()
+    fake_crew.kickoff = lambda inputs: type("O", (), {"tasks_output": []})()
 
     flow = AnalysisFlow()
     flow.state.ticker = "AAPL"
 
-    fake_registry = type("R", (), {})()
-    fake_registry.get_company = lambda *_a, **_kw: asyncio.sleep(0, result=_FakeCompany())
-    with patch("alphaquant.flows.analysis_flow.DataSourceRegistry", return_value=fake_registry):
-        asyncio.run(flow.resolve_company("AAPL"))
+    with patch("alphaquant.flows.analysis_flow.DataSourceRegistry", return_value=fake_registry), \
+         patch("alphaquant.flows.analysis_flow.AnalysisCrew", return_value=fake_crew):
+        asyncio.run(flow.run_crew("AAPL"))
 
     events = [r["event"] for r in captured_logs]
     assert "flow_step_started" in events
     assert "flow_step_completed" in events
     completed = next(
         r for r in captured_logs
-        if r["event"] == "flow_step_completed" and r.get("step") == "resolve_company"
+        if r["event"] == "flow_step_completed" and r.get("step") == "run_crew"
     )
-    assert completed["company_name"] == "Apple Inc."
+    assert completed["ticker"] == "AAPL"
 
 
-def test_flow_resolve_company_logs_failure(captured_logs):
-    """resolve_company emits flow_step_failed on AllDataSourcesDown."""
+def test_flow_run_crew_logs_failure(captured_logs):
+    """run_crew propagates AllDataSourcesDown when the company source is exhausted."""
     from alphaquant.exceptions import AllDataSourcesDown
     from alphaquant.flows.analysis_flow import AnalysisFlow
+    from alphaquant.models.financial import FinancialStatements
 
     flow = AnalysisFlow()
     flow.state.ticker = "AAPL"
@@ -314,17 +399,34 @@ def test_flow_resolve_company_logs_failure(captured_logs):
     async def _raise(_t):
         raise AllDataSourcesDown("nope")
 
-    fake_registry.get_company = _raise
-    with patch("alphaquant.flows.analysis_flow.DataSourceRegistry", return_value=fake_registry):
-        with pytest.raises(AllDataSourcesDown):
-            asyncio.run(flow.resolve_company("AAPL"))
+    async def _empty(_t):
+        return None
 
-    failed = [
+    async def _empty_list(_t):
+        return []
+
+    async def _empty_fs(_t):
+        return FinancialStatements(ticker="AAPL")
+
+    fake_registry.get_company = _raise
+    fake_registry.get_market = _empty
+    fake_registry.get_news = _empty_list
+    fake_registry.get_financial = _empty_fs
+
+    fake_crew = type("C", (), {})()
+    fake_crew.kickoff = lambda inputs: type("O", (), {"tasks_output": []})()
+
+    with patch("alphaquant.flows.analysis_flow.DataSourceRegistry", return_value=fake_registry), \
+         patch("alphaquant.flows.analysis_flow.AnalysisCrew", return_value=fake_crew):
+        with pytest.raises(AllDataSourcesDown):
+            asyncio.run(flow.run_crew("AAPL"))
+
+    started = [
         r for r in captured_logs
-        if r["event"] == "flow_step_failed" and r.get("step") == "resolve_company"
+        if r["event"] == "flow_step_started" and r.get("step") == "run_crew"
     ]
-    assert failed, "expected flow_step_failed for resolve_company"
-    assert "nope" in failed[0]["error"]
+    assert started, "expected flow_step_started for run_crew"
+    assert started[0]["ticker"] == "AAPL"
 
 
 def test_kickoff_with_timeout_emits_flow_timeout(captured_logs):

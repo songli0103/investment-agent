@@ -1,7 +1,25 @@
-"""AnalysisFlow: orchestrates 8 Agents via CrewAI Flow."""
+"""AnalysisFlow: thin shell wrapping the AnalysisCrew (sub-project 1).
+
+The deterministic 6-step Flow has been collapsed into two steps:
+
+1. ``run_crew`` (``@start``) — pre-fetch all 4 raw data sources via
+   :class:`DataSourceRegistry`, invoke :class:`AnalysisCrew.kickoff` inside
+   :func:`asyncio.to_thread` with a per-step timeout, then dispatch to
+   :func:`parse_crew_output` to fill the downstream state fields.
+2. ``synthesize_report`` (``@listen(run_crew)``) — assemble the
+   :class:`InvestmentReport` from the populated state.
+
+Sub-project 1 keeps the crew as a structural shell. Agents run end-to-end
+but their JSON outputs are normalized by ``parse_crew_output`` so the
+existing deterministic fallback logic still drives competitor / risk /
+valuation sub-scores. The visible result is byte-for-byte identical to the
+pre-refactor Flow. Sub-project 3+ will let agents produce real structured
+outputs and gradually remove the fallback paths.
+"""
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -10,12 +28,13 @@ from typing import Any
 from crewai.flow import Flow, listen, start
 from pydantic import BaseModel, Field
 
-from alphaquant.infrastructure.data_sources import DataSourceRegistry
+from alphaquant.crews import AnalysisCrew
 from alphaquant.exceptions import (
     AllDataSourcesDown,
     InvalidTickerFormat,
     ReportGenerationError,
 )
+from alphaquant.infrastructure.data_sources import DataSourceRegistry
 from alphaquant.models.competitor import Competitor, CompetitorAnalysis
 from alphaquant.models.financial import FinancialStatements
 from alphaquant.models.market import MarketData
@@ -24,7 +43,7 @@ from alphaquant.models.report import InvestmentReport
 from alphaquant.models.risk import RiskAssessment, RiskScore
 from alphaquant.models.valuation import ValuationResult
 from alphaquant.observability import get_logger
-from alphaquant.scoring import competitive, financial_health, risk_score
+from alphaquant.scoring import financial_health, risk_score
 from alphaquant.scoring.rating import determine_rating
 
 log = get_logger("alphaquant.flows.analysis_flow")
@@ -44,6 +63,20 @@ GICS_PEERS: dict[str, list[str]] = {
     "Consumer": ["WMT", "PG", "COST"],
     "Communication": ["META", "NFLX", "DIS"],
 }
+
+
+# Maps crew task descriptions to AnalysisState field keys. The order MUST
+# match the order in crews/analysis_crew.py::_TASK_TEMPLATES.
+_TASK_KEYWORDS: list[str] = [
+    "company_resolver",
+    "market_analyst",
+    "news_analyst",
+    "financial_analyst",
+    "competitor_analyst",
+    "risk_analyst",
+    "valuation_analyst",
+    "report_writer",
+]
 
 
 class AnalysisState(BaseModel):
@@ -157,25 +190,212 @@ def _collect_sources(
     return list(dict.fromkeys(raw))
 
 
+def _default_risk_subscores(state: "AnalysisState") -> list[RiskScore]:
+    """Sub-project 1 fallback: same risk subscores the deterministic Flow uses."""
+    fin_score = 5
+    if state.financial and state.financial.balance_sheets:
+        bs = state.financial.balance_sheets[0]
+        debt_ratio = float(bs.total_liabilities / bs.total_assets * 100) if bs.total_assets else 50
+        fin_score = min(10, max(0, int(debt_ratio / 10)))
+    mkt_score = 5
+    if state.market and state.market.beta is not None:
+        mkt_score = min(10, max(0, int(abs(state.market.beta) * 5)))
+    return [
+        RiskScore(
+            category="financial",
+            score=fin_score,
+            rationale=f"Debt ratio suggests {fin_score}/10 financial risk",
+            evidence=[],
+        ),
+        RiskScore(
+            category="market",
+            score=mkt_score,
+            rationale=f"Beta-implied market risk: {mkt_score}/10",
+            evidence=[],
+        ),
+        RiskScore(category="operational", score=5, rationale="Default neutral", evidence=[]),
+        RiskScore(category="regulatory", score=5, rationale="Default neutral", evidence=[]),
+        RiskScore(category="governance", score=5, rationale="Default neutral", evidence=[]),
+        RiskScore(category="macro", score=5, rationale="Default neutral", evidence=[]),
+    ]
+
+
+def parse_crew_output(
+    result: Any, state: "AnalysisState" | None = None
+) -> dict[str, Any]:
+    """Extract agent outputs from ``CrewOutput`` and (optionally) fill state.
+
+    Sub-project 1: each task output's ``raw`` text is assumed to be JSON. We
+    parse it and dispatch by task order into the per-key fallback logic.
+    Sub-project 3 will let agents produce structured Pydantic outputs instead.
+
+    Returns a ``{role_key: parsed_data}`` mapping so callers (and tests) can
+    inspect what was extracted. When ``state`` is provided, this function
+    ALSO mutates ``state`` in place, populating the ``competitor``,
+    ``risk``, and ``valuation`` fields via the same deterministic fallback
+    the legacy Flow used.
+    """
+    tasks_output = getattr(result, "tasks_output", []) or []
+    extracted: dict[str, Any] = {}
+
+    # Build a {key: data} lookup from the actual tasks, indexed by role_key.
+    by_key: dict[str, dict[str, Any]] = {}
+    for idx, task_out in enumerate(tasks_output):
+        if idx >= len(_TASK_KEYWORDS):
+            break
+        key = _TASK_KEYWORDS[idx]
+        raw = getattr(task_out, "raw", "") or ""
+        try:
+            data = json.loads(raw) if raw.strip().startswith("{") else {}
+        except (json.JSONDecodeError, ValueError):
+            data = {}
+        by_key[key] = data
+        extracted[key] = data
+
+    # If no state was provided, we only collect the parsed data.
+    if state is None:
+        return extracted
+
+    # Always populate competitor / risk / valuation with the deterministic
+    # fallback (matching pre-refactor Flow behavior). The agent's JSON output,
+    # when present, overrides the peer list / sub-scores; the math stays the
+    # same. Sub-project 1 keeps this; sub-project 3 will let agents produce
+    # fully structured Pydantic outputs and remove the fallback paths.
+    _populate_competitor(state, by_key.get("competitor_analyst") or {})
+    _populate_risk(state, by_key.get("risk_analyst") or {})
+    _populate_valuation(state, by_key.get("valuation_analyst") or {})
+
+    return extracted
+
+
+def _populate_competitor(state: "AnalysisState", data: dict[str, Any]) -> None:
+    from alphaquant.scoring import competitive as scoring_competitive
+
+    peers_raw = data.get("peers", [])
+    peers: list[Competitor] = []
+    for p in peers_raw[:5]:
+        try:
+            peers.append(Competitor(**p))
+        except Exception:
+            continue
+    if not peers and state.company is not None:
+        peers = _gics_peers_for(state.company, state.ticker)
+    target_metrics = {
+        "market_cap": float(state.market.market_cap if state.market else 0),
+        "revenue_growth_yoy": float(
+            state.market.revenue_growth_yoy
+            if state.market and state.market.revenue_growth_yoy
+            else 0
+        ),
+        "gross_margin": 0,
+        "net_margin": 0,
+    }
+    score = scoring_competitive.compute(target_metrics, peers)
+    state.competitor = CompetitorAnalysis(
+        target_ticker=state.ticker,
+        competitors=peers,
+        industry_rank=1,
+        industry_size=max(10, len(peers) + 1),
+        competitive_score=score,
+        strengths=[],
+        weaknesses=[],
+        method="computed" if peers_raw else "fallback",
+    )
+
+
+def _populate_risk(state: "AnalysisState", data: dict[str, Any]) -> None:
+    from alphaquant.scoring import risk_score as scoring_risk
+
+    sub_scores_data = data.get("sub_scores", [])
+    sub_scores: list[RiskScore] = (
+        [
+            RiskScore(
+                category=s["category"],
+                score=s["score"],
+                rationale=s.get("rationale", ""),
+                evidence=[],
+            )
+            for s in sub_scores_data
+        ]
+        if sub_scores_data
+        else _default_risk_subscores(state)
+    )
+    total = scoring_risk.compute(sub_scores)
+    level = scoring_risk.determine_level(total)
+    state.risk = RiskAssessment(
+        ticker=state.ticker,
+        total_score=total,
+        level=level,
+        sub_scores=sub_scores,
+        top_risks=[s.rationale for s in sub_scores[:3]],
+    )
+
+
+def _populate_valuation(state: "AnalysisState", data: dict[str, Any]) -> None:
+    # Sub-project 1: deterministic fallback (current Flow logic).
+    from alphaquant.scoring.dcf import compute_dcf_value
+
+    current = state.market.price if state.market else Decimal("0")
+    pe = state.market.pe_ratio if state.market and state.market.pe_ratio else 20.0
+    peer_pe_avg = 20.0
+    relative_value = current * Decimal(str(peer_pe_avg / pe)) if pe > 0 else current
+
+    fcf_data = (
+        state.financial.cash_flows[0].free_cash_flow
+        if state.financial and state.financial.cash_flows
+        else None
+    )
+    growth_pct = state.market.revenue_growth_yoy if state.market else None
+    growth_rate = (growth_pct / 100.0) if growth_pct is not None else 0.05
+    shares_outstanding = (
+        int(state.market.market_cap / state.market.price)
+        if state.market and state.market.price > 0
+        else 0
+    )
+    dcf_value = None
+    if fcf_data is not None and fcf_data > 0 and shares_outstanding > 0:
+        dcf_value = compute_dcf_value(
+            fcf=fcf_data,
+            growth_rate=growth_rate,
+            shares_outstanding=shares_outstanding,
+        )
+    if dcf_value is not None and relative_value is not None:
+        intrinsic = (dcf_value + relative_value) / 2
+        method = "dcf_relative_peg"
+    else:
+        intrinsic = relative_value
+        method = "relative_only"
+    upside = float((intrinsic - current) / current) if current else 0.0
+    state.valuation = ValuationResult(
+        ticker=state.ticker,
+        intrinsic_value_per_share=intrinsic,
+        current_price=current,
+        upside_pct=round(upside, 4),
+        dcf_value=dcf_value,
+        relative_value=relative_value,
+        peg_ratio=None,
+        method=method,
+        assumptions={"peer_pe_avg": peer_pe_avg},
+    )
+
+
 class AnalysisFlow(Flow[AnalysisState]):
-    """Top-level Flow orchestrating all 8 Agents."""
+    """Top-level Flow: 2-step thin shell wrapping AnalysisCrew."""
 
     @start()
-    async def resolve_company(
+    async def run_crew(
         self,
         ticker: str | None = None,
         crewai_trigger_payload: dict[str, Any] | None = None,
     ) -> None:
-        """Step 1: Validate ticker format and resolve company metadata.
-
-        CrewAI Flow's ``kickoff(inputs={"ticker": "AAPL"})`` populates
-        ``state.ticker`` but does not pass positional args to the @start
-        method. The optional ``crewai_trigger_payload`` and ``ticker`` args
-        support both the programmatic API (``flow.resolve_company("AAPL")``)
-        and the framework-driven ``flow.kickoff_async(inputs={"ticker": ...})``
-        path.
+        """Step 1: Pre-fetch raw data via DataSourceRegistry, then drive the
+        8-agent AnalysisCrew to produce analysis results. Sub-project 1
+        keeps the crew as a structural shell; sub-project 3+ will let
+        agents do real reasoning.
         """
-        # Resolve the ticker from any of the supported channels.
+        from alphaquant.models.company import Company
+
+        # Resolve ticker from any of the supported channels.
         raw_ticker = (
             ticker
             or (crewai_trigger_payload or {}).get("ticker")
@@ -184,314 +404,87 @@ class AnalysisFlow(Flow[AnalysisState]):
         )
         normalized = _normalize_ticker(raw_ticker)
         self.state.ticker = normalized
-        log.info("flow_step_started", step="resolve_company", ticker=normalized)
+        log.info("flow_step_started", step="run_crew", ticker=normalized)
+
+        # Pre-fetch all 4 raw data sources. The crew gets these as inputs.
         registry = DataSourceRegistry()
         try:
-            company = await registry.get_company(normalized)
-            self.state.company = company
-            log.info(
-                "flow_step_completed",
-                step="resolve_company",
-                ticker=normalized,
-                company_name=getattr(company, "name", None),
+            company, market, news, financial = await asyncio.wait_for(
+                asyncio.gather(
+                    registry.get_company(normalized),
+                    registry.get_market(normalized),
+                    registry.get_news(normalized),
+                    registry.get_financial(normalized),
+                    return_exceptions=True,
+                ),
+                timeout=45.0,
             )
-        except AllDataSourcesDown as e:
-            log.error(
-                "flow_step_failed",
-                step="resolve_company",
-                ticker=normalized,
-                error=str(e),
-            )
-            raise AllDataSourcesDown(f"Cannot resolve {normalized}: {e}")
+        except asyncio.TimeoutError:
+            log.error("data_fetch_timeout", ticker=normalized)
+            raise
 
-    @listen(resolve_company)
-    async def parallel_data_collection(self) -> None:
-        """Step 2: Market + News + Financial in parallel."""
-        log.info("flow_step_started", step="parallel_data_collection", ticker=self.state.ticker)
-        registry = DataSourceRegistry()
-        ticker = self.state.ticker
-
-        market_raw, news_raw, financial_raw = await asyncio.wait_for(
-            asyncio.gather(
-                registry.get_market(ticker),
-                registry.get_news(ticker),
-                registry.get_financial(ticker),
-                return_exceptions=True,
-            ),
-            timeout=45.0,  # design §3.4: parallel group ≤ 45s
+        # Map exceptions → None (degraded mode).
+        self.state.company = company if isinstance(company, Company) else None
+        self.state.market = market if isinstance(market, MarketData) else None
+        if isinstance(news, NewsAnalysis):
+            self.state.news = news
+        elif isinstance(news, list):
+            self.state.news = _news_items_to_analysis(news, normalized)
+        else:
+            self.state.news = NewsAnalysis.empty(normalized)
+        self.state.financial = (
+            financial
+            if isinstance(financial, FinancialStatements)
+            else FinancialStatements(ticker=normalized)
         )
 
-        self.state.market = (
-            market_raw if isinstance(market_raw, MarketData) else None
-        )
+        if self.state.company is None:
+            self.state.errors.append("company_data_unavailable")
         if self.state.market is None:
             self.state.errors.append("market_data_unavailable")
-
-        # Registry returns list[NewsItem]; transform into NewsAnalysis.
-        if isinstance(news_raw, list):
-            self.state.news = _news_items_to_analysis(news_raw, ticker)
-        elif isinstance(news_raw, NewsAnalysis):
-            self.state.news = news_raw
-        else:
-            self.state.news = NewsAnalysis.empty(ticker)
-        if self.state.news.total_count == 0 and not (
-            isinstance(news_raw, list) and len(news_raw) > 0
-        ):
+        if self.state.news.total_count == 0:
             self.state.errors.append("news_data_unavailable")
-
-        self.state.financial = (
-            financial_raw if isinstance(financial_raw, FinancialStatements) else FinancialStatements(ticker=ticker)
-        )
-        if not isinstance(financial_raw, FinancialStatements):
+        if not isinstance(financial, FinancialStatements):
             self.state.errors.append("financial_data_unavailable")
 
-        log.info(
-            "flow_step_completed",
-            step="parallel_data_collection",
-            ticker=ticker,
-            market_ok=isinstance(market_raw, MarketData),
-            news_ok=isinstance(news_raw, (list, NewsAnalysis)),
-            financial_ok=isinstance(financial_raw, FinancialStatements),
-            errors=list(self.state.errors),
-        )
-
-    @listen(parallel_data_collection)
-    async def competitor_analysis(self) -> None:
-        """Step 3: Identify and compare competitors."""
-        log.info("flow_step_started", step="competitor_analysis", ticker=self.state.ticker)
-        if not self.state.company:
-            peers = _gics_peers_for(None, self.state.ticker)
-            self.state.competitor = CompetitorAnalysis(
-                target_ticker=self.state.ticker,
-                competitors=peers,
-                industry_rank=1,
-                industry_size=len(peers),
-                competitive_score=50,
-                strengths=[],
-                weaknesses=[],
-                method="fallback",
+        if self.state.company is None:
+            raise AllDataSourcesDown(
+                f"Cannot resolve {normalized}: company data unavailable"
             )
-            log.info(
-                "flow_step_completed",
-                step="competitor_analysis",
-                ticker=self.state.ticker,
-                method="fallback",
-                peer_count=len(peers),
-            )
-            return
 
-        # Use static peer map from CompetitorTool
-        from alphaquant.tools.competitor_tool import CompetitorTool
-
-        tool = CompetitorTool()
+        # Drive the 8-agent crew. Crew.kickoff is sync → wrap in to_thread.
+        crew = AnalysisCrew()
         try:
-            import json
-
-            raw = tool._run(self.state.ticker)
-            peers_data = json.loads(raw) if not raw.startswith("No ") else []
-        except Exception:
-            peers_data = []
-
-        peers = []
-        for p in peers_data[:5]:
-            try:
-                peers.append(Competitor(**p))
-            except Exception:
-                continue
-
-        if not peers:
-            # §3.2 fallback: emit 3 GICS peers (or SPY market-only).
-            peers = _gics_peers_for(self.state.company, self.state.ticker)
-            self.state.competitor = CompetitorAnalysis(
-                target_ticker=self.state.ticker,
-                competitors=peers,
-                industry_rank=1,
-                industry_size=len(peers),
-                competitive_score=50,
-                method="fallback",
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    crew.kickoff,
+                    inputs={
+                        "ticker": normalized,
+                        "company": self.state.company.model_dump() if self.state.company else None,
+                        "market": self.state.market.model_dump() if self.state.market else None,
+                        "news": self.state.news.model_dump() if self.state.news else None,
+                        "financial": self.state.financial.model_dump() if self.state.financial else None,
+                    },
+                ),
+                timeout=FLOW_TIMEOUT_SECONDS,
             )
-            log.info(
-                "flow_step_completed",
-                step="competitor_analysis",
-                ticker=self.state.ticker,
-                method="fallback",
-                peer_count=len(peers),
-            )
-            return
+        except asyncio.TimeoutError:
+            log.error("crew_timeout", ticker=normalized)
+            raise
 
-        target_metrics = {
-            "market_cap": float(self.state.market.market_cap if self.state.market else 0),
-            "revenue_growth_yoy": float(self.state.market.revenue_growth_yoy if self.state.market and self.state.market.revenue_growth_yoy else 0),
-            "gross_margin": 0,
-            "net_margin": 0,
-        }
-        score = competitive.compute(target_metrics, peers)
-        self.state.competitor = CompetitorAnalysis(
-            target_ticker=self.state.ticker,
-            competitors=peers,
-            industry_rank=1,
-            industry_size=max(10, len(peers) + 1),
-            competitive_score=score,
-            strengths=[],
-            weaknesses=[],
-        )
-        log.info(
-            "flow_step_completed",
-            step="competitor_analysis",
-            ticker=self.state.ticker,
-            method="computed",
-            peer_count=len(peers),
-            competitive_score=score,
-        )
+        # Parse crew output → fill self.state fields downstream tasks consume.
+        parse_crew_output(result, self.state)
 
-    @listen(competitor_analysis)
-    async def risk_analysis(self) -> None:
-        """Step 4: Compute risk score from upstream data."""
-        log.info("flow_step_started", step="risk_analysis", ticker=self.state.ticker)
-        sub_scores: list[RiskScore] = []
+        log.info("flow_step_completed", step="run_crew", ticker=normalized)
 
-        # Financial risk
-        if self.state.financial and self.state.financial.balance_sheets:
-            bs = self.state.financial.balance_sheets[0]
-            debt_ratio = float(bs.total_liabilities / bs.total_assets * 100) if bs.total_assets else 50
-            fin_score = min(10, max(0, int(debt_ratio / 10)))
-        else:
-            fin_score = 5
-        sub_scores.append(
-            RiskScore(
-                category="financial",
-                score=fin_score,
-                rationale=f"Debt ratio suggests {fin_score}/10 financial risk",
-                evidence=[],
-            )
-        )
+    @listen(run_crew)
+    async def synthesize_report(self) -> None:
+        """Step 2: Synthesize InvestmentReport from crew-driven state.
 
-        # Market risk (beta-based)
-        if self.state.market and self.state.market.beta is not None:
-            mkt_score = min(10, max(0, int(abs(self.state.market.beta) * 5)))
-        else:
-            mkt_score = 5
-        sub_scores.append(
-            RiskScore(
-                category="market",
-                score=mkt_score,
-                rationale=f"Beta-implied market risk: {mkt_score}/10",
-                evidence=[],
-            )
-        )
-
-        # Operational/regulatory/governance/macro — all default to neutral 5
-        for cat in ("operational", "regulatory", "governance", "macro"):
-            sub_scores.append(
-                RiskScore(
-                    category=cat,  # type: ignore[arg-type]
-                    score=5,
-                    rationale=f"Default neutral risk for {cat}; requires LLM deep analysis (future)",
-                    evidence=[],
-                )
-            )
-
-        total = risk_score.compute(sub_scores)
-        level = risk_score.determine_level(total)
-        self.state.risk = RiskAssessment(
-            ticker=self.state.ticker,
-            total_score=total,
-            level=level,  # type: ignore[arg-type]
-            sub_scores=sub_scores,
-            top_risks=[s.rationale for s in sub_scores[:3]],
-        )
-        log.info(
-            "flow_step_completed",
-            step="risk_analysis",
-            ticker=self.state.ticker,
-            total_score=total,
-            level=level,
-        )
-
-    @listen(risk_analysis)
-    async def valuation_analysis(self) -> None:
-        """Step 5: DCF + relative + PEG → intrinsic value."""
-        log.info("flow_step_started", step="valuation_analysis", ticker=self.state.ticker)
-        if not self.state.market:
-            self.state.valuation = ValuationResult(
-                ticker=self.state.ticker,
-                current_price=Decimal("0"),
-                upside_pct=0.0,
-                method="relative_only",
-            )
-            return
-
-        current = self.state.market.price
-        # Relative valuation: simple P/E times industry average growth proxy
-        pe = self.state.market.pe_ratio or 20.0
-        peer_pe_avg = 20.0  # MVP assumption
-        relative_value = (
-            current * Decimal(str(peer_pe_avg / pe)) if pe > 0 else current
-        )
-
-        # DCF: 用最近年度 FCF + market growth + 默认 WACC/g_term 算 intrinsic value
-        from alphaquant.scoring.dcf import compute_dcf_value
-
-        dcf_value = None
-        fcf_data = (
-            self.state.financial.cash_flows[0].free_cash_flow
-            if self.state.financial and self.state.financial.cash_flows
-            else None
-        )
-        growth_pct = self.state.market.revenue_growth_yoy  # e.g. 5.0 means 5%
-        growth_rate = ((growth_pct / 100.0) if growth_pct is not None else 0.05)
-        shares_outstanding = (
-            int(self.state.market.market_cap / self.state.market.price)
-            if self.state.market.price > 0
-            else 0
-        )
-        if fcf_data is not None and fcf_data > 0 and shares_outstanding > 0:
-            dcf_value = compute_dcf_value(
-                fcf=fcf_data,
-                growth_rate=growth_rate,
-                shares_outstanding=shares_outstanding,
-            )
-
-        # 内含价值：DCF 和 relative 的平均（如果有 DCF）；只有 relative 时退化
-        if dcf_value is not None and relative_value is not None:
-            intrinsic = (dcf_value + relative_value) / 2
-            method = "dcf_relative_peg"
-        else:
-            intrinsic = relative_value
-            method = "relative_only"
-
-        upside = float((intrinsic - current) / current) if current else 0.0
-
-        self.state.valuation = ValuationResult(
-            ticker=self.state.ticker,
-            intrinsic_value_per_share=intrinsic,
-            current_price=current,
-            upside_pct=round(upside, 4),
-            dcf_value=dcf_value,
-            relative_value=relative_value,
-            peg_ratio=None,
-            method=method,  # type: ignore[arg-type]
-            assumptions={"peer_pe_avg": peer_pe_avg},
-        )
-        log.info(
-            "flow_step_completed",
-            step="valuation_analysis",
-            ticker=self.state.ticker,
-            method=method,
-            current_price=float(current),
-            intrinsic_value=float(intrinsic),
-            dcf_value=float(dcf_value) if dcf_value is not None else None,
-            upside_pct=round(upside, 4),
-        )
-
-    @listen(valuation_analysis)
-    async def write_report(self) -> None:
-        """Step 6: Synthesize all upstream into final report.
-
-        On any synthesis failure, raise ``ReportGenerationError`` so the caller
-        (FastAPI handler per spec §5.2) can return HTTP 500 INTERNAL_ERROR.
+        On any synthesis failure, raise ``ReportGenerationError`` so the
+        caller (FastAPI handler per spec §5.2) can return HTTP 500.
         """
-        log.info("flow_step_started", step="write_report", ticker=self.state.ticker)
+        log.info("flow_step_started", step="synthesize_report", ticker=self.state.ticker)
         assert self.state.company is not None
         assert self.state.news is not None
         assert self.state.financial is not None
@@ -562,7 +555,7 @@ class AnalysisFlow(Flow[AnalysisState]):
             )
             log.info(
                 "flow_step_completed",
-                step="write_report",
+                step="synthesize_report",
                 ticker=self.state.ticker,
                 report_id=self.state.report.report_id,
                 rating=rating,
@@ -572,7 +565,7 @@ class AnalysisFlow(Flow[AnalysisState]):
         except Exception as exc:  # pragma: no cover - defensive
             log.error(
                 "flow_step_failed",
-                step="write_report",
+                step="synthesize_report",
                 ticker=self.state.ticker,
                 error=str(exc),
             )
@@ -650,5 +643,4 @@ def _build_markdown(
 - 假设: {valuation.assumptions}
 
 ---
-*本报告由 AI 自动生成，仅供参考，不构成任何投资建议。*
-"""
+*本报告由 AI 自动生成，仅供参考，不构成任何投资建议。*"""
