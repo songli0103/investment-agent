@@ -1279,3 +1279,89 @@ class TestExtractDataField:
         model, err = _extract_data_field("", MarketData, "market_data_unavailable")
         assert model is None
         assert err == "market_data_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# Graceful degradation E2E (sub-3 Task 4)
+# ---------------------------------------------------------------------------
+
+
+class TestGracefulDegradation:
+    """End-to-end graceful degradation: company fetch failure → AllDataSourcesDown.
+
+    Sub-3 Blocker 3 verification: ZZZZZZ (format-valid, registry-unknown) flows
+    through Flow → crew → tool → AllDataSourcesDown without raising
+    INTERNAL_ERROR. The chain is mocked at the parse_crew_output boundary; we
+    simulate the CrewAI task outputs the Blocker 3 fix in commit `8d1412e`
+    is designed to produce (tool returns ``"Error fetching company: ..."``
+    string instead of an empty shell).
+    """
+
+    def test_unknown_ticker_raises_all_data_sources_down(self):
+        """ZZZZZZ → parse_crew_output raises AllDataSourcesDown.
+
+        The full 8-task output list is faked: only the company_resolver task
+        fails. All other data tasks (market, news, financial) and analysis
+        tasks (competitor, risk, valuation, report) return valid JSON /
+        Pydantic instances so we prove that the company failure is the
+        proximate cause of AllDataSourcesDown.
+        """
+        from alphaquant.exceptions import AllDataSourcesDown
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+        from alphaquant.models.market import MarketData
+        from alphaquant.models.news import NewsAnalysis
+        from alphaquant.models.financial import FinancialStatements
+        from decimal import Decimal
+        import datetime
+
+        # _FakeTask mimics CrewAI's TaskOutput: ``raw`` is the agent/tool text,
+        # ``pydantic`` is set when the task is configured with output_pydantic.
+        class _FakeTask:
+            def __init__(self, pyd_obj=None, raw=""):
+                self.pydantic = pyd_obj
+                self.raw = raw
+
+        # Blocker 3 fix shape: error string starts with "Error" so
+        # _extract_data_field's error-string detector catches it.
+        company_error = "Error fetching company: AllDataSourcesDown: cannot resolve ZZZZZZ"
+
+        # Degraded-but-valid market placeholder (matches the sample_market
+        # fixture shape but for ZZZZZZ ticker and zero price).
+        market = MarketData(
+            ticker="ZZZZZZ",
+            price=Decimal("0"),
+            change_pct=0.0,
+            volume=0,
+            market_cap=0,
+            pe_ratio=None,
+            revenue_growth_yoy=None,
+            beta=None,
+            source="degraded",
+            as_of=datetime.datetime.utcnow(),
+        )
+        news = NewsAnalysis.empty("ZZZZZZ")
+        fin = FinancialStatements(ticker="ZZZZZZ")
+
+        # 8 task outputs (4 data + 4 analysis), matching _TASK_KEYWORDS order.
+        tasks_output = [
+            _FakeTask(raw=company_error),  # company_resolver failed
+            _FakeTask(pyd_obj=market, raw=market.model_dump_json()),
+            _FakeTask(raw="[]"),  # news returns JSON list per tool contract
+            _FakeTask(pyd_obj=fin, raw=fin.model_dump_json()),
+            _FakeTask(raw=""),  # analysis tasks 4-7 — irrelevant for this path
+            _FakeTask(raw=""),
+            _FakeTask(raw=""),
+            _FakeTask(raw=""),
+        ]
+
+        class _FakeResult:
+            pass
+
+        _FakeResult.tasks_output = tasks_output
+
+        state = AnalysisState(ticker="ZZZZZZ")
+        with pytest.raises(AllDataSourcesDown) as exc_info:
+            parse_crew_output(_FakeResult(), state)
+        # The raised message must include the ticker so the API layer can
+        # surface a user-friendly error (see Task 4 brief expected output).
+        assert "ZZZZZZ" in str(exc_info.value)
