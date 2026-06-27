@@ -27,16 +27,18 @@ from alphaquant.agents.report_writer import build_report_writer_agent
 from alphaquant.agents.risk_analyst import build_risk_analyst_agent
 from alphaquant.agents.valuation_analyst import build_valuation_analyst_agent
 from alphaquant.infrastructure.llm import get_llm
-from alphaquant.models.competitor import CompetitorAnalysis
-from alphaquant.models.risk import RiskAssessment
-from alphaquant.models.valuation import ValuationResult
-from alphaquant.models.report import InvestmentReport
+from alphaquant.models.report import ReportWriterOutput
 from pydantic import BaseModel
 
 
-# Sub-project 3: each entry is (role_key, description_template, output_pydantic_model_or_None).
-# Data tasks (idx 0-3) keep None (their tool returns raw JSON, parsed in Flow).
-# Analysis tasks (idx 4-6) get Pydantic models. Report writer (idx 7) gets InvestmentReport.
+# Sub-project 3 (then reverted): the 3 analysis tasks (idx 4-6) originally
+# had output_pydantic set so the LLM produced structured Pydantic output. In
+# production, the LLM was emitting structurally invalid output (wrong field
+# names, conversational text) that caused the CrewAI converter to retry-loop
+# until the 180s flow timeout. We reverted those tasks to text-only — the
+# Flow now computes competitor/risk/valuation deterministically. The
+# report_writer (idx 7) produces ``ReportWriterOutput`` (a slim subset of
+# ``InvestmentReport``); the Flow assembles the full ``InvestmentReport``.
 _TASK_TEMPLATES: list[tuple[str, str, type[BaseModel] | None]] = [
     (
         "company_resolver",
@@ -60,23 +62,32 @@ _TASK_TEMPLATES: list[tuple[str, str, type[BaseModel] | None]] = [
     ),
     (
         "competitor_analyst",
-        "Identify competitors and compute competitive score for '{ticker}'.",
-        CompetitorAnalysis,
+        "Summarize the competitive landscape for '{ticker}' in plain text. "
+        "Do NOT produce structured Pydantic output; the Flow computes the "
+        "structured CompetitorAnalysis from data. Your text is used as "
+        "context for the report writer.",
+        None,
     ),
     (
         "risk_analyst",
-        "Compute risk assessment for '{ticker}' from upstream data.",
-        RiskAssessment,
+        "Summarize the key risk factors for '{ticker}' in plain text. "
+        "Do NOT produce structured Pydantic output; the Flow computes the "
+        "structured RiskAssessment from data. Your text is used as context "
+        "for the report writer.",
+        None,
     ),
     (
         "valuation_analyst",
-        "Compute valuation (DCF + relative) for '{ticker}'.",
-        ValuationResult,
+        "Summarize the valuation analysis (DCF + relative) for '{ticker}' in "
+        "plain text. Do NOT produce structured Pydantic output; the Flow "
+        "computes the structured ValuationResult from data. Your text is "
+        "used as context for the report writer.",
+        None,
     ),
     (
         "report_writer",
-        "Synthesize InvestmentReport for '{ticker}'.",
-        InvestmentReport,
+        "Synthesize the final markdown report and rating for '{ticker}'.",
+        ReportWriterOutput,
     ),
 ]
 

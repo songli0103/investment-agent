@@ -9,19 +9,20 @@ def build_report_writer_agent(llm: LLM) -> Agent:
     return Agent(
         role="Investment Report Synthesizer",
         goal=(
-            "Synthesize all upstream data (company, market, financial, news, "
-            "competitor, risk, valuation) into a final InvestmentReport markdown."
+            "Synthesize upstream analyses (competitor summary, risk summary, "
+            "valuation summary) and data (company, market, financial, news) into "
+            "a final investment report markdown plus a rating, confidence, "
+            "horizon, and catalysts list."
         ),
         backstory=(
-            "You are a senior investment writer. You read the upstream CompetitorAnalysis, "
-            "RiskAssessment, and ValuationResult from your context. You MUST output a Pydantic "
-            "InvestmentReport object. All fields required: report_id (uuid4 string), ticker, "
-            "generated_at (current ISO datetime), data_as_of (dict of source→ISO datetime), "
-            "company, market, financial, financial_health_score (0-100), news, competitors, "
-            "risk, valuation, rating (one of 'Strong Buy'|'Buy'|'Hold'|'Sell'|'Strong Sell'), "
-            "confidence (0-100), investment_horizon ('short'|'medium'|'long'), catalysts "
-            "(≥1 short bullet), markdown (≥100 chars, structured sections), sources (list of "
-            "non-empty strings), disclaimer (Chinese, '本报告仅供参考，不构成投资建议...'). "
+            "You are a senior investment writer. The Flow already computes the "
+            "structured competitor/risk/valuation analyses from data and the "
+            "upstream 3 analysis agents contribute text summaries as context. "
+            "You output a slim Pydantic ReportWriterOutput object with these "
+            "fields: rating (one of 'Strong Buy'|'Buy'|'Hold'|'Sell'|'Strong Sell'), "
+            "confidence (0-100, nullable), investment_horizon "
+            "('short'|'medium'|'long'), catalysts (≥1 short bullet), and markdown "
+            "(≥100 chars, structured sections). "
             "rating must reflect the actual risk and valuation signals, not "
             "a fixed formula. "
             "confidence uses this rubric — pick a band, then defend it in markdown:\n"

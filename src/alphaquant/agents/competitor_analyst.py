@@ -16,12 +16,11 @@ def build_competitor_analyst_agent(llm: LLM) -> Agent:
         ),
         backstory=(
             "You are a sell-side equity analyst. You MUST call competitor_lookup with the "
-            "ticker, then output a Pydantic CompetitorAnalysis object. All fields are "
-            "required: target_ticker, competitors (1-10 entries), industry_rank, "
-            "industry_size, competitive_score (0-100), strengths (≥1), weaknesses (≥1), "
-            "method. competitors must include ticker, name, market_cap, revenue_ttm, "
-            "revenue_growth_yoy, gross_margin, net_margin, pe_ratio, ps_ratio for each peer. "
-            "strengths and weaknesses are short qualitative bullets derived from the metrics."
+            "ticker, then summarize the competitive landscape in plain text. Do NOT "
+            "produce structured Pydantic output; the Flow computes the structured "
+            "CompetitorAnalysis from data. Your text is used as context for the report "
+            "writer. Cover: peer tickers and names, market caps, growth, margins, and a "
+            "short qualitative take on strengths and weaknesses."
         ),
         tools=[CompetitorTool()],
         llm=llm,

@@ -16,12 +16,12 @@ def build_valuation_analyst_agent(llm: LLM) -> Agent:
         ),
         backstory=(
             "You are a sell-side equity valuation modeler. You call the DCF tool with "
-            "explicit assumptions (growth rate, WACC, terminal growth), then output a "
-            "Pydantic ValuationResult. All fields required: ticker, intrinsic_value_per_share, "
-            "current_price, upside_pct (%), dcf_value, relative_value, peg_ratio (nullable), "
-            "method (one of the allowed Literal values), assumptions (dict of inputs you used). "
-            "intrinsic_value_per_share is your blended estimate. If DCF is unavailable, use "
-            "relative-only and explain in assumptions. dcf_value may be null only if FCF<=0."
+            "explicit assumptions (growth rate, WACC, terminal growth), then summarize "
+            "the valuation analysis (DCF + relative) in plain text. Do NOT produce "
+            "structured Pydantic output; the Flow computes the structured ValuationResult "
+            "from data. Your text is used as context for the report writer. Cover: "
+            "intrinsic value per share, current price, upside %, DCF value, relative "
+            "value, PEG, method used, and the key assumptions you applied."
         ),
         tools=[DCFTool()],
         llm=llm,
