@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal
-from pydantic import BaseModel, Field
+from typing import Any, Literal
+from pydantic import BaseModel, Field, field_validator
 
 
 class Competitor(BaseModel):
@@ -29,3 +29,17 @@ class CompetitorAnalysis(BaseModel):
     method: Literal[
         "gics", "keyword", "manual", "fallback", "hybrid", "multi_factor", "peer_comparison"
     ] = "gics"
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _coerce_method(cls, v: Any) -> Any:
+        """LLM guard: competitor agent sometimes returns verbose descriptions
+        (e.g. 'Multi-factor weighted ...') instead of an allowed value.
+        Coerce any unknown value to the safe default 'gics' so the flow does
+        not crash. See RiskAssessment._normalize_level for the established
+        pattern."""
+        allowed = {
+            "gics", "keyword", "manual", "fallback",
+            "hybrid", "multi_factor", "peer_comparison",
+        }
+        return v if v in allowed else "gics"
