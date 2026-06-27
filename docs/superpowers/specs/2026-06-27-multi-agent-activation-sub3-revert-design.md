@@ -46,7 +46,7 @@ Sub-project 3 原 spec 的目标是：**让 4 个 analysis agent 通过 `Task(ou
 
 1. **3 个 analysis agent 回退到 text-only**：`competitor_analyst` / `risk_analyst` / `valuation_analyst` task 的 `output_pydantic=None`，产出的 raw text 作为 context 给 ReportWriter task（idx 7）。
 2. **ReportWriter task 保留 Pydantic**：但用新 slim 模型 `ReportWriterOutput`（5 字段），不是完整 `InvestmentReport`。
-3. **Flow 重新引入 3 个 deterministic helper**：`_populate_competitor` / `_populate_risk` / `_populate_valuation`，从 data fields 算 Pydantic 结构化模型。`scoring/{competitive,risk_score}` 模块**重新引入**作为这些 helper 的实现细节（commit `b646b75` 删的又引回来）。
+3. **Flow 重新引入 3 个 deterministic helper**（inline in `flows/analysis_flow.py`）：`_compute_competitor_analysis` / `_compute_risk_assessment` / `_compute_valuation`，从 data fields 算 Pydantic 结构化模型。这些 helper **不重新拆成独立模块**——保留在 flow 文件里（commit `b646b75` 删除的 `scoring/{competitive,risk_score}` 模块**不**重新引入；sub-1 时代就是这些逻辑在 flow 顶层）。
 4. **`synthesize_report` 简化**：从 5 步骤拼装（compute competitor/risk/valuation → assemble report → fill runtime fields → collect sources → write disclaimer）改为 4 步骤（compute 3 analysis → assemble report from data + analyses + writer_output → fill runtime fields）。
 5. **`_ASYNC_TASK_INDICES` 调整**：从 `{0,1,2,3}` → `{0,1,2,3,4,5,6}`（保留：3 个 analysis text-only 任务并行加速，但 `parse_crew_output` 不再读它们的输出）。
 6. **`FLOW_TIMEOUT_SECONDS` 180 → 300**：实测 7 个 LLM task（含 1 个 sequential report_writer）300s 内可完成；600s 不必要（300 留 2-3× 缓冲）。
@@ -84,10 +84,10 @@ run_crew (@start):
     tasks[7]    → state.writer_output
 
 synthesize_report (@listen(run_crew)):
-  state.competitor = _populate_competitor(state)         # deterministic
-  state.risk       = _populate_risk(state)               # deterministic
-  state.valuation  = _populate_valuation(state)          # deterministic
-  state.report     = _assemble_report(state)             # data + 3 analyses + writer_output
+  state.competitor = _compute_competitor_analysis(state)   # deterministic
+  state.risk       = _compute_risk_assessment(state)       # deterministic
+  state.valuation  = _compute_valuation(state)            # deterministic
+  state.report     = InvestmentReport(...)                # data + 3 analyses + writer_output (inline)
   state.report.disclaimer = DISCLAIMER_TEXT
   state.report.generated_at = datetime.utcnow()
   state.report.report_id = str(uuid.uuid4())
@@ -162,33 +162,42 @@ class ReportWriterOutput(BaseModel):
 ```
 
 **已有但放宽**（`src/alphaquant/models/{valuation,competitor}.py`）：
-- `ValuationResult.method` Literal 从 `["dcf_relative_peg", "relative_only"]` 放宽到含 LLM 实际产出的所有合理值（commit `dbfac17`）
-- `CompetitorAnalysis.method` Literal 同上（commit `dbfac17`）
+- `ValuationResult.method` Literal 放宽到 `{dcf_relative_peg, relative_only, blended, dcf_only, relative, dcf_relative_blended}`（commit `dbfac17`）；越界值由 `_coerce_method` 兜底成 `"dcf_relative_peg"`
+- `CompetitorAnalysis.method` Literal 放宽到 `{gics, keyword, manual, fallback, hybrid, multi_factor, peer_comparison}`（commit `dbfac17`）；越界值由 `_coerce_method` 兜底成 `"gics"`
 - `RiskAssessment` 6 个 sub-score 约束放宽（commit `65517dd`）
 
 **不变**：
 - `InvestmentReport` 字段（除 `confidence: int | None` 已允许 None，commit `de51986`）
 - 4 个 data 模型（`Company` / `MarketData` / `FinancialStatements` / `NewsAnalysis`）
 
-### Deterministic helper 签名（Flow 内部）
+### Deterministic helper 签名（Flow 内部 inline）
 
 ```python
-# flows/analysis_flow.py
+# flows/analysis_flow.py（inline，非独立模块）
 
-def _populate_competitor(state: AnalysisState) -> CompetitorAnalysis | None:
-    """从 state.market.peers + state.company 算 competitive_score。
+def _gics_peers_for(ticker: str, sector: str | None) -> list[Competitor]:
+    """Fallback peer set（当 market.peers 为空时用）— 来自 sub-1 GICS_PEERS map"""
+
+def _compute_competitor_analysis(state: "AnalysisState") -> CompetitorAnalysis | None:
+    """从 state.market.peers + state.company.industry 算 competitive_score。
     失败或缺数据 → None + state.errors.append("competitor_unavailable")"""
 
-def _populate_risk(state: AnalysisState) -> RiskAssessment | None:
-    """重新引入 _default_risk_subscores() 算 6 类 RiskScore。
-    RiskAssessment.total_score = weighted_sum(sub_scores)"""
+def _default_risk_subscores(state: "AnalysisState") -> list[RiskScore]:
+    """6 类 RiskScore 兜底（financial / operational / market / regulatory / governance / macro）"""
 
-def _populate_valuation(state: AnalysisState) -> ValuationResult | None:
+def _compute_risk_assessment(state: "AnalysisState") -> RiskAssessment | None:
+    """_default_risk_subscores + weighted_sum → RiskAssessment.total_score"""
+
+def _compute_valuation(state: "AnalysisState") -> ValuationResult | None:
     """compute_dcf_value(fcf, growth, shares, wacc, g_term) + relative value。
-    method = "dcf_relative_peg" if dcf_value else "relative_only\""""
+    method = "dcf_relative_peg" if dcf_value else "relative_only" """
 
-def _assemble_report(state: AnalysisState) -> InvestmentReport:
-    """从 state.{company,market,news,financial,competitor,risk,valuation,writer_output} 拼装。"""
+def _assemble_report(state: "AnalysisState") -> InvestmentReport:
+    """从 state.{company,market,news,financial,competitor,risk,valuation,writer_output} 拼装。
+    compute_financial_health(state.financial) → state.report.financial_health_score"""
+
+# 注:实际工作树里 `_assemble_report` 是 inline 在 `synthesize_report` 里,
+# 不抽成独立函数。spec 保留这个签名是"应该的样子",实际代码可能 inline。
 ```
 
 ## 数据流细节
@@ -223,13 +232,18 @@ def parse_crew_output(result: CrewOutput, state: "AnalysisState") -> dict[str, A
 def synthesize_report(self) -> None:
     """Sub-3 revert: compute 3 analysis fields deterministically, then assemble
     InvestmentReport from data + analyses + writer_output."""
-    # Step 1: deterministic analysis fields
-    self.state.competitor = _populate_competitor(self.state)
-    self.state.risk       = _populate_risk(self.state)
-    self.state.valuation  = _populate_valuation(self.state)
+    # Step 1: deterministic analysis fields (inline helpers)
+    self.state.competitor = _compute_competitor_analysis(self.state)
+    self.state.risk       = _compute_risk_assessment(self.state)
+    self.state.valuation  = _compute_valuation(self.state)
 
-    # Step 2: assemble full report (raises ReportGenerationError if writer_output is None)
-    self.state.report = _assemble_report(self.state)
+    # Step 2: assemble full report inline (raises ReportGenerationError if writer_output is None)
+    self.state.report = InvestmentReport(
+        company=..., market=..., ...,
+        rating=self.state.writer_output.rating,
+        confidence=self.state.writer_output.confidence,
+        ...
+    )
 
     # Step 3: fill runtime fields
     self.state.report.disclaimer = DISCLAIMER_TEXT
@@ -301,7 +315,7 @@ async def run_crew(self) -> None:
 | `parse_crew_output` 对 competitor/risk/valuation | Pydantic extract | IGNORED | 同上 |
 | `synthesize_report` | 仅填 runtime 字段 | 算 3 analysis + 拼装 | LLM 不再产出 competitor/risk/valuation |
 | `FLOW_TIMEOUT_SECONDS` | 180 → 600 | 180 → 300 | 实测 300 够；600 保守 |
-| `scoring/{rating,competitive,risk_score}` | 删除 | **重新引入为 Flow-internal helpers** | Flow 重新需要 deterministic 算 |
+| `scoring/{rating,competitive,risk_score}` | 删除 | **保留删除**；deterministic 计算以 inline `_compute_*` helper 形式存在于 `flows/analysis_flow.py` | 复用 sub-1 时代的 flow-internal 实现位置（最内聚） |
 | `_coerce_rating` validator | 无 | 新增 | LLM 输出越界 rating 时兜底 "Hold" |
 | `_ASYNC_TASK_INDICES` | `{0..3}` → `{0..6}` | `{0..3}` → `{0..6}`（**不变**） | text-only 任务并行仍加速（无 Pydantic converter 开销） |
 | `confidence: int \| None` 允许 None | 已在 commit `de51986` 支持 | 不变 | Confidence Rubric 兼容 |
@@ -318,16 +332,15 @@ async def run_crew(self) -> None:
 | `src/alphaquant/agents/risk_analyst.py` | backtory 改：text-only | commit 2 |
 | `src/alphaquant/agents/valuation_analyst.py` | backtory 改：text-only | commit 2 |
 | `src/alphaquant/agents/report_writer.py` | backtory 改：output_pydantic=ReportWriterOutput 5 字段 | commit 2 |
-| `src/alphaquant/flows/analysis_flow.py` | 重新引入 `_populate_competitor` / `_populate_risk` / `_populate_valuation` / `_assemble_report`；`FLOW_TIMEOUT_SECONDS = 300`；`run_crew` 改用 `_kickoff_sync` + `asyncio.to_thread` + `asyncio.wait_for`；`parse_crew_output` 只读 4 data + 1 writer_output；`synthesize_report` 4 步骤 | commit 3 |
-| `src/alphaquant/models/valuation.py` | `method` Literal 放宽（commit `dbfac17` 已在 main） | commit 3 |
-| `src/alphaquant/models/competitor.py` | `method` Literal 放宽（commit `dbfac17` 已在 main） | commit 3 |
+| `src/alphaquant/flows/analysis_flow.py` | 重新引入 inline `_compute_competitor_analysis` / `_compute_risk_assessment` / `_compute_valuation` / `_assemble_report`；`FLOW_TIMEOUT_SECONDS = 300`；`run_crew` 改用 `_kickoff_sync` + `asyncio.to_thread` + `asyncio.wait_for`；`parse_crew_output` 只读 4 data + 1 writer_output；`synthesize_report` 4 步骤 | commit 3 |
+| `src/alphaquant/models/valuation.py` | `method` Literal 放宽到 `{dcf_relative_peg, relative_only, blended, dcf_only, relative, dcf_relative_blended}`（commit `dbfac17` 已在 main） | commit 3 |
+| `src/alphaquant/models/competitor.py` | `method` Literal 放宽到 `{gics, keyword, manual, fallback, hybrid, multi_factor, peer_comparison}`（commit `dbfac17` 已在 main） | commit 3 |
 | `src/alphaquant/models/__init__.py` | export `ReportWriterOutput` | commit 3 |
 | `src/alphaquant/interfaces/frontend/pages/1_Analyze.py` | 适配新模型字段（看实际 diff） | commit 3 |
-| `src/alphaquant/scoring/` | 重新引入 `competitive.py` / `risk_score.py`（`rating.py` 不需要，因为 LLM 决定 rating） | commit 3 |
 
 ### 删除
 
-**无**。本 spec 不删除文件；重新引入 `scoring/{competitive,risk_score}` 是 commit 3 的一部分。
+**无**。本 spec 不删除文件；deterministic helpers 作为 inline 函数加在 `flows/analysis_flow.py`，不重新引入独立 `scoring/{competitive,risk_score}` 模块。
 
 ### 测试变更（commit 4）
 
@@ -407,7 +420,7 @@ src/alphaquant/frontend/                        # 仅 1_Analyze.py 微调（comm
 
 1. **LLM 输出 markdown 长度 / 风格不一致**：每次跑 markdown 不同，frontend 缓存逻辑需要确认兼容。Mitigation：commit 4 测试覆盖 markdown 非空约束。
 
-2. **`_populate_competitor` / `_populate_risk` / `_populate_valuation` 重新引入 vs sub-3 删除**：表面看是"sub-3 spec 失败回退"，但实质是把"deterministic 计算"从 Flow 顶层 helper 移到 Flow 内部 helper（更接近 sub-1 的位置），代码更内聚。Mitigation：本 spec 明确说明这个偏离，避免后续维护者困惑"为什么 sub-3 删了又引回来"。
+2. **deterministic helpers 作为 `_compute_*` 函数 inline 在 flow**：和 sub-1 时代位置相同（sub-1 这些 helper 就在 flow 文件里；sub-3 试图拆到 `scoring/{competitive,risk_score}` 后删除；sub-3 revert 回到 sub-1 的位置）。Mitigation：本 spec 明确说明这个偏离，避免后续维护者困惑"为什么 sub-3 拆了又合回来"。
 
 3. **3 个 analysis agent 产出的 text 现在**没用**：它们的输出仅作为 report_writer 的 context（`context=[tasks[4..6]]`）。如果 LLM 在 task 4-6 上 hang / 慢，整个 run 仍会卡。Mitigation：3 个 analysis task 仍 `async_execution=True`，并行启动；如果 LLM hang 会被 `FLOW_TIMEOUT_SECONDS=300` 兜住。
 
@@ -445,9 +458,8 @@ src/alphaquant/frontend/                        # 仅 1_Analyze.py 微调（comm
 - 验证：`uv run pytest tests/test_crew.py -q`
 
 ### Commit 3: `feat(flow): compute competitor/risk/valuation deterministically + assemble report from writer_output`
-- `src/alphaquant/flows/analysis_flow.py`：重新引入 4 个 helper + 改 run_crew + 改 synthesize_report + `FLOW_TIMEOUT_SECONDS = 300`
-- `src/alphaquant/scoring/{competitive,risk_score}.py`：重新引入
-- `src/alphaquant/models/{valuation,competitor}.py`：Literal 放宽（已在 main）
+- `src/alphaquant/flows/analysis_flow.py`：inline `_compute_competitor_analysis` / `_compute_risk_assessment` / `_compute_valuation` + inline `synthesize_report` 拼装 `InvestmentReport` + 改 `run_crew` 用 `_kickoff_sync` + `asyncio.to_thread` + `asyncio.wait_for` + `FLOW_TIMEOUT_SECONDS = 300`
+- `src/alphaquant/models/{valuation,competitor}.py`：Literal 放宽（已在 main，不需 commit 3 改）
 - `src/alphaquant/models/__init__.py`：export `ReportWriterOutput`
 - `src/alphaquant/interfaces/frontend/pages/1_Analyze.py`：适配
 - 验证：`uv run pytest tests/test_flow.py -q`
