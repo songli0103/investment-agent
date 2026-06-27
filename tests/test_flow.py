@@ -348,64 +348,26 @@ class TestSynthesizeReport:
         sample_market,
         sample_news,
         sample_financial,
-        sample_competitor_analysis,
     ):
-        from alphaquant.models.report import InvestmentReport
+        """Set up the data fields + a ReportWriterOutput on the flow state.
+
+        Sub-project-3 revert: synthesize_report computes the 3 analyses
+        (competitor/risk/valuation) deterministically and assembles the
+        full ``InvestmentReport`` from data + analyses + ``state.writer_output``.
+        """
+        from alphaquant.models.report import ReportWriterOutput
 
         flow.state.ticker = "AAPL"
         flow.state.company = sample_company
         flow.state.market = sample_market
         flow.state.news = sample_news
         flow.state.financial = sample_financial
-        flow.state.competitor = sample_competitor_analysis
-        risk = RiskAssessment(
-            ticker="AAPL",
-            total_score=40,
-            level="medium",
-            sub_scores=[
-                RiskScore(
-                    category="financial",
-                    score=4,
-                    rationale="placeholder for test",
-                    evidence=[],
-                )
-            ],
-            top_risks=[],
-        )
-        valuation = ValuationResult(
-            ticker="AAPL",
-            intrinsic_value_per_share=Decimal("180.00"),
-            current_price=Decimal("150.00"),
-            upside_pct=0.2,
-            dcf_value=None,
-            relative_value=Decimal("180.00"),
-            method="relative_only",
-        )
-        flow.state.risk = risk
-        flow.state.valuation = valuation
-        # Report is now populated by the ReportWriter agent (sub-3 contract);
-        # synthesize_report only fills runtime fields. Pre-populate it here so
-        # we can exercise the synthesize_report contract.
-        flow.state.report = InvestmentReport(
-            report_id="11111111-1111-1111-1111-111111111111",
-            ticker="AAPL",
-            generated_at=datetime(2026, 1, 1),
-            data_as_of={},
-            company=sample_company,
-            market=sample_market,
-            financial=sample_financial,
-            financial_health_score=70,
-            news=sample_news,
-            competitors=sample_competitor_analysis,
-            risk=risk,
-            valuation=valuation,
+        flow.state.writer_output = ReportWriterOutput(
             rating="Hold",
             confidence=70,
             investment_horizon="medium",
             catalysts=["placeholder catalyst"],
             markdown="## placeholder markdown",
-            sources=[],
-            disclaimer="placeholder",
         )
 
     def test_fills_runtime_fields(
@@ -414,9 +376,9 @@ class TestSynthesizeReport:
         sample_market,
         sample_news,
         sample_financial,
-        sample_competitor_analysis,
     ):
-        """Sub-project 3: synthesize_report only fills sources, disclaimer, generated_at."""
+        """Sub-project-3 revert: synthesize_report assembles the full report
+        from data + deterministic analyses + the LLM's ReportWriterOutput."""
         from alphaquant.flows.analysis_flow import DISCLAIMER_TEXT
 
         flow = AnalysisFlow()
@@ -426,40 +388,67 @@ class TestSynthesizeReport:
             sample_market,
             sample_news,
             sample_financial,
-            sample_competitor_analysis,
         )
 
-        # Capture generated_at before, so we can verify it changed
-        before = flow.state.report.generated_at
+        # state.report starts as None
+        assert flow.state.report is None
 
         _run(flow.synthesize_report())
 
-        assert flow.state.report is not None
-        assert flow.state.report.ticker == "AAPL"
-        # Sub-3: rating / confidence / catalysts / markdown come from the
-        # ReportWriter agent, NOT from synthesize_report. Verify they were
-        # preserved unchanged.
-        assert flow.state.report.rating == "Hold"
-        assert flow.state.report.confidence == 70
-        assert flow.state.report.catalysts == ["placeholder catalyst"]
-        assert flow.state.report.markdown == "## placeholder markdown"
+        report = flow.state.report
+        assert report is not None
+        assert report.ticker == "AAPL"
+        # LLM synthesis fields come from writer_output (state.writer_output)
+        assert report.rating == "Hold"
+        assert report.confidence == 70
+        assert report.catalysts == ["placeholder catalyst"]
+        assert report.markdown == "## placeholder markdown"
+        # Deterministic analyses are populated by synthesize_report
+        assert report.competitors is not None
+        assert report.competitors.target_ticker == "AAPL"
+        assert report.risk is not None
+        assert report.risk.ticker == "AAPL"
+        assert report.valuation is not None
+        assert report.valuation.ticker == "AAPL"
+        # Data fields are copied through to the report
+        assert report.company is sample_company
+        assert report.market is sample_market
+        assert report.financial is sample_financial
+        assert report.news is sample_news
         # Runtime fields:
-        assert flow.state.report.disclaimer == DISCLAIMER_TEXT
-        assert isinstance(flow.state.report.sources, list)
-        # generated_at was rewritten by synthesize_report
-        assert flow.state.report.generated_at >= before
+        assert report.disclaimer == DISCLAIMER_TEXT
+        assert isinstance(report.sources, list)
+        # report_id and generated_at are fresh
+        assert report.report_id
+        assert report.financial_health_score is not None
 
-    def test_missing_report_raises_report_generation_error(
+    def test_missing_writer_output_uses_fallback_defaults(
         self,
+        sample_company,
+        sample_market,
+        sample_news,
+        sample_financial,
     ):
-        """§3.2: when ReportWriter failed (state.report is None), raise ReportGenerationError."""
-        from alphaquant.exceptions import ReportGenerationError
-
+        """Sub-project-3 revert: when the LLM failed to produce a
+        ReportWriterOutput, synthesize_report builds a fallback report
+        (rating=Hold, confidence=None) instead of raising."""
         flow = AnalysisFlow()
         flow.state.ticker = "AAPL"
-        # state.report left as None
-        with pytest.raises(ReportGenerationError):
-            _run(flow.synthesize_report())
+        flow.state.company = sample_company
+        flow.state.market = sample_market
+        flow.state.news = sample_news
+        flow.state.financial = sample_financial
+        # state.writer_output left as None
+        assert flow.state.writer_output is None
+
+        _run(flow.synthesize_report())
+
+        report = flow.state.report
+        assert report is not None
+        # Fallback defaults from synthesize_report:
+        assert report.rating == "Hold"
+        assert report.confidence is None
+        assert "writer_output_unavailable" in flow.state.errors
 
 
 # ---------------------------------------------------------------------------
@@ -568,11 +557,12 @@ class TestFlowKickoff:
         sample_financial,
         sample_competitor_analysis,
     ):
-        """§3.4: kickoff_with_timeout returns within 180s for a fast flow.
+        """§3.4: kickoff_with_timeout returns within 300s for a fast flow.
 
         Sub-project 2: tool _run methods are mocked instead of registry.
 
         Sub-project 3: include Pydantic instances in tasks_output 4-7.
+        Sub-project 3 (revised): FLOW_TIMEOUT_SECONDS raised from 180 to 300.
         """
         flow = AnalysisFlow()
 
@@ -611,9 +601,10 @@ class TestFlowKickoff:
         assert flow.state.report.ticker == "AAPL"
 
     def test_kickoff_with_timeout_enforces_limit(self):
-        """§3.4: a slow kickoff_async → asyncio.TimeoutError after 120s.
+        """§3.4: a slow kickoff_async → asyncio.TimeoutError after 300s.
 
         We patch FLOW_TIMEOUT_SECONDS to a tiny value so the test runs quickly.
+        Sub-project 3 (revised): default raised from 120 to 300.
         """
         import time
 
@@ -941,34 +932,19 @@ class TestParseCrewOutput:
         assert state.financial.income_statements == []
         assert "financial_data_unavailable" in state.errors
 
-    def test_parse_crew_output_extracts_competitor_from_pydantic(self):
+    def test_parse_crew_output_extracts_writer_output_from_pydantic(self):
+        """Sub-project-3 revert: tasks 4-6 are text-only; only task 7
+        (report_writer) produces structured output. Verify state.writer_output
+        is set from the Pydantic output and the 3 analysis fields are NOT
+        extracted (they're computed deterministically in synthesize_report).
+        """
         from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
-        from alphaquant.models.competitor import CompetitorAnalysis
         from alphaquant.models.company import Company
         from alphaquant.models.market import MarketData
         from alphaquant.models.financial import FinancialStatements
         from alphaquant.models.news import NewsAnalysis
-        from alphaquant.models.risk import RiskAssessment
-        from alphaquant.models.valuation import ValuationResult
-        from alphaquant.models.report import InvestmentReport
+        from alphaquant.models.report import ReportWriterOutput
 
-        ca = CompetitorAnalysis(
-            target_ticker="AAPL",
-            competitors=[
-                Competitor(
-                    ticker="MSFT",
-                    name="Microsoft",
-                    market_cap=2_500_000_000_000,
-                    revenue_ttm=Decimal("200000000000"),
-                )
-            ],
-            industry_rank=1,
-            industry_size=5,
-            competitive_score=50,
-            strengths=["x"],
-            weaknesses=["y"],
-            method="gics",
-        )
         company = Company(
             ticker="AAPL",
             name="Apple Inc.",
@@ -991,52 +967,12 @@ class TestParseCrewOutput:
         )
         fin = FinancialStatements(ticker="AAPL")
         news = NewsAnalysis.empty("AAPL")
-        risk = RiskAssessment(
-            ticker="AAPL",
-            total_score=50,
-            level="medium",
-            sub_scores=[
-                RiskScore(
-                    category="financial",
-                    score=5,
-                    rationale="placeholder subscore rationale text",
-                    evidence=[],
-                )
-            ],
-            top_risks=[],
-            method="weighted_sum_v1",
-        )
-        val = ValuationResult(
-            ticker="AAPL",
-            intrinsic_value_per_share=Decimal("150"),
-            current_price=Decimal("180"),
-            upside_pct=-16.67,
-            dcf_value=Decimal("120"),
-            relative_value=Decimal("180"),
-            peg_ratio=None,
-            method="dcf_relative_peg",
-            assumptions={},
-        )
-        rep = InvestmentReport(
-            report_id="00000000-0000-0000-0000-000000000000",
-            ticker="AAPL",
-            generated_at=datetime.utcnow(),
-            data_as_of={},
-            company=company,
-            market=market,
-            financial=fin,
-            financial_health_score=70,
-            news=news,
-            competitors=ca,
-            risk=risk,
-            valuation=val,
+        wo = ReportWriterOutput(
             rating="Hold",
             confidence=70,
             investment_horizon="medium",
             catalysts=["Earnings beat"],
             markdown="## Summary\nTest report.",
-            sources=["yahoo"],
-            disclaimer="test disclaimer",
         )
 
         class _FakeTask:
@@ -1049,10 +985,10 @@ class TestParseCrewOutput:
             _FakeTask(pyd_obj=market, raw=market.model_dump_json()),    # 1
             _FakeTask(raw="[]"),                                          # 2 news list
             _FakeTask(pyd_obj=fin, raw=fin.model_dump_json()),           # 3
-            _FakeTask(pyd_obj=ca, raw=ca.model_dump_json()),             # 4
-            _FakeTask(pyd_obj=risk, raw=risk.model_dump_json()),         # 5
-            _FakeTask(pyd_obj=val, raw=val.model_dump_json()),           # 6
-            _FakeTask(pyd_obj=rep, raw=rep.model_dump_json()),           # 7
+            _FakeTask(raw="text-only summary"),                           # 4 competitor (text)
+            _FakeTask(raw="text-only summary"),                           # 5 risk (text)
+            _FakeTask(raw="text-only summary"),                           # 6 valuation (text)
+            _FakeTask(pyd_obj=wo, raw=wo.model_dump_json()),             # 7 report_writer
         ]
 
         class _FakeResult:
@@ -1063,13 +999,30 @@ class TestParseCrewOutput:
         state = AnalysisState(ticker="AAPL")
         parse_crew_output(_FakeResult(), state)
 
-        assert state.competitor is ca
-        assert state.risk is risk
-        assert state.valuation is val
-        assert state.report is rep
+        # Data fields are extracted (parse_crew_output re-parses JSON, so
+        # check values, not identity)
+        assert state.company is not None
+        assert state.company.ticker == "AAPL"
+        assert state.company.name == "Apple Inc."
+        assert state.market is not None
+        assert state.market.ticker == "AAPL"
+        assert state.market.pe_ratio == 28.0
+        assert state.financial is not None
+        assert state.financial.ticker == "AAPL"
+        # ReportWriterOutput is extracted to state.writer_output
+        assert state.writer_output is wo
+        # 3 analysis fields are NOT extracted (text-only); Flow computes them
+        assert state.competitor is None
+        assert state.risk is None
+        assert state.valuation is None
+        # state.report is NOT built by parse_crew_output (Flow does it)
+        assert state.report is None
 
-    def test_parse_crew_output_missing_pydantic_sets_none_and_appends_error(self):
-        """When a Pydantic task output is empty, state.<field> = None + error appended."""
+    def test_parse_crew_output_missing_writer_output_sets_none_and_appends_error(self):
+        """When the report_writer task output is empty, state.writer_output
+        stays None and an error is appended. The 3 analysis tasks (text-only)
+        are not checked for Pydantic — only their raw text is captured (if at all).
+        """
         from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
         from alphaquant.models.company import Company
         from alphaquant.models.market import MarketData
@@ -1107,10 +1060,10 @@ class TestParseCrewOutput:
             _FakeTask(pyd_obj=market, raw=market.model_dump_json()),
             _FakeTask(raw="[]"),
             _FakeTask(pyd_obj=fin, raw=fin.model_dump_json()),
-            _FakeTask(raw=""),  # competitor failed → empty
-            _FakeTask(raw=""),  # risk failed
-            _FakeTask(raw=""),  # valuation failed
-            _FakeTask(raw=""),  # report writer failed
+            _FakeTask(raw=""),  # competitor (text-only, no Pydantic)
+            _FakeTask(raw=""),  # risk
+            _FakeTask(raw=""),  # valuation
+            _FakeTask(raw=""),  # report writer failed → empty
         ]
 
         class _FakeResult:
@@ -1121,13 +1074,11 @@ class TestParseCrewOutput:
         state = AnalysisState(ticker="AAPL")
         parse_crew_output(_FakeResult(), state)
 
+        assert state.writer_output is None
+        # 3 analysis fields are not extracted at all (text-only path)
         assert state.competitor is None
         assert state.risk is None
         assert state.valuation is None
-        assert state.report is None
-        assert "competitor_analyst_unavailable" in state.errors
-        assert "risk_analyst_unavailable" in state.errors
-        assert "valuation_analyst_unavailable" in state.errors
         assert "report_writer_unavailable" in state.errors
 
 
@@ -1365,3 +1316,20 @@ class TestGracefulDegradation:
         # The raised message must include the ticker so the API layer can
         # surface a user-friendly error (see Task 4 brief expected output).
         assert "ZZZZZZ" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Sub-3 revert: Flow configuration constants
+# ---------------------------------------------------------------------------
+
+
+class TestFlowConfigConstants:
+    """Verify sub-3-revert constant values on the Flow module."""
+
+    def test_flow_timeout_seconds_is_300(self):
+        """Sub-3 revert spec: FLOW_TIMEOUT_SECONDS raised from 180 to 300 to
+        accommodate real-LLM latency observed during sub-2 (MSFT/TSLA hit
+        the 180s limit while generating the risk rationale)."""
+        from alphaquant.flows.analysis_flow import FLOW_TIMEOUT_SECONDS
+
+        assert FLOW_TIMEOUT_SECONDS == 300.0

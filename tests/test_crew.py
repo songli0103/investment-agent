@@ -184,12 +184,14 @@ class TestAnalysisCrew:
         )
 
     def test_task_templates_uses_3_tuple_with_pydantic_model(self):
-        """_TASK_TEMPLATES entries must be (key, description, pydantic_model_or_None)."""
+        """_TASK_TEMPLATES entries must be (key, description, pydantic_model_or_None).
+
+        Sub-project-3 revert: the 3 analysis tasks (idx 4-6) emit text only —
+        the Flow computes the structured analyses deterministically. Only the
+        report writer (idx 7) produces structured output (ReportWriterOutput).
+        """
         from alphaquant.crews.analysis_crew import _TASK_TEMPLATES
-        from alphaquant.models.competitor import CompetitorAnalysis
-        from alphaquant.models.risk import RiskAssessment
-        from alphaquant.models.valuation import ValuationResult
-        from alphaquant.models.report import InvestmentReport
+        from alphaquant.models.report import ReportWriterOutput
 
         assert len(_TASK_TEMPLATES) == 8
         for entry in _TASK_TEMPLATES:
@@ -206,11 +208,12 @@ class TestAnalysisCrew:
         assert _TASK_TEMPLATES[1][2] is None
         assert _TASK_TEMPLATES[2][2] is None
         assert _TASK_TEMPLATES[3][2] is None
-        # 3 analysis tasks + report writer: Pydantic
-        assert _TASK_TEMPLATES[4][2] is CompetitorAnalysis
-        assert _TASK_TEMPLATES[5][2] is RiskAssessment
-        assert _TASK_TEMPLATES[6][2] is ValuationResult
-        assert _TASK_TEMPLATES[7][2] is InvestmentReport
+        # 3 analysis tasks: text only (Flow computes structured analyses)
+        assert _TASK_TEMPLATES[4][2] is None
+        assert _TASK_TEMPLATES[5][2] is None
+        assert _TASK_TEMPLATES[6][2] is None
+        # Report writer: produces slim ReportWriterOutput (Flow assembles full report)
+        assert _TASK_TEMPLATES[7][2] is ReportWriterOutput
 
     def test_async_task_indices_cover_data_and_analysis_not_report(self):
         """_ASYNC_TASK_INDICES must cover 0-6 (data + analysis), not 7 (report writer)."""
@@ -243,42 +246,45 @@ class TestAnalysisCrew:
         assert crew.tasks[5] in ctx
         assert crew.tasks[6] in ctx
 
-    def test_competitor_task_has_output_pydantic(self):
+    def test_competitor_task_has_no_output_pydantic(self):
+        """Sub-3 revert: competitor task emits text only; Flow computes the
+        structured CompetitorAnalysis deterministically."""
         from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
-        from alphaquant.models.competitor import CompetitorAnalysis
         from unittest.mock import patch
         from tests.conftest import _FakeLLM
         fake = _FakeLLM()
         with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
             crew = _AC()
-        assert getattr(crew.tasks[4], "output_pydantic", None) is CompetitorAnalysis
+        assert getattr(crew.tasks[4], "output_pydantic", None) is None
 
-    def test_risk_task_has_output_pydantic(self):
+    def test_risk_task_has_no_output_pydantic(self):
+        """Sub-3 revert: risk task emits text only; Flow computes the
+        structured RiskAssessment deterministically."""
         from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
-        from alphaquant.models.risk import RiskAssessment
         from unittest.mock import patch
         from tests.conftest import _FakeLLM
         fake = _FakeLLM()
         with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
             crew = _AC()
-        assert getattr(crew.tasks[5], "output_pydantic", None) is RiskAssessment
+        assert getattr(crew.tasks[5], "output_pydantic", None) is None
 
-    def test_valuation_task_has_output_pydantic(self):
+    def test_valuation_task_has_no_output_pydantic(self):
+        """Sub-3 revert: valuation task emits text only; Flow computes the
+        structured ValuationResult deterministically."""
         from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
-        from alphaquant.models.valuation import ValuationResult
         from unittest.mock import patch
         from tests.conftest import _FakeLLM
         fake = _FakeLLM()
         with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
             crew = _AC()
-        assert getattr(crew.tasks[6], "output_pydantic", None) is ValuationResult
+        assert getattr(crew.tasks[6], "output_pydantic", None) is None
 
     def test_report_writer_task_has_output_pydantic(self):
         from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
-        from alphaquant.models.report import InvestmentReport
+        from alphaquant.models.report import ReportWriterOutput
         from unittest.mock import patch
         from tests.conftest import _FakeLLM
         fake = _FakeLLM()
         with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
             crew = _AC()
-        assert getattr(crew.tasks[7], "output_pydantic", None) is InvestmentReport
+        assert getattr(crew.tasks[7], "output_pydantic", None) is ReportWriterOutput

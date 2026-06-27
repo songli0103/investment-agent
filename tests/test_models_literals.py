@@ -90,16 +90,32 @@ class TestValuationResultMethodLiteral:
         )
         assert v.method == method
 
-    def test_unknown_value_rejected(self):
-        """Sanity: truly unknown values are still rejected (Literal still constrained)."""
-        with pytest.raises(ValidationError):
-            ValuationResult(
-                ticker="AAPL",
-                intrinsic_value_per_share=Decimal("150"),
-                current_price=Decimal("180"),
-                upside_pct=-16.67,
-                method="nonsense_method_xyz",
-            )
+    def test_unknown_value_coerced_to_default(self):
+        """LLM guard: unknown method strings are coerced to 'dcf_relative_peg'
+        rather than crashing the flow. The Pydantic v2 Literal still constrains
+        the type to str; the field_validator adds a safe-default fallback for
+        unexpected LLM outputs (e.g. conversational text, 'nonsense_method_xyz')."""
+        v = ValuationResult(
+            ticker="AAPL",
+            intrinsic_value_per_share=Decimal("150"),
+            current_price=Decimal("180"),
+            upside_pct=-16.67,
+            method="nonsense_method_xyz",
+        )
+        assert v.method == "dcf_relative_peg"
+
+    def test_verbose_llm_description_coerced_to_default(self):
+        """Real failure mode observed in production: LLM returns a multi-sentence
+        description instead of a Literal value. The field_validator collapses it
+        to the default so the flow can continue."""
+        v = ValuationResult(
+            ticker="AAPL",
+            intrinsic_value_per_share=Decimal("150"),
+            current_price=Decimal("180"),
+            upside_pct=-16.67,
+            method="Multi-factor weighted DCF blended with relative comps (40%)",
+        )
+        assert v.method == "dcf_relative_peg"
 
 
 class TestCompetitorAnalysisMethodLiteral:
@@ -141,16 +157,33 @@ class TestCompetitorAnalysisMethodLiteral:
         )
         assert c.method == method
 
-    def test_unknown_value_rejected(self):
-        with pytest.raises(ValidationError):
-            CompetitorAnalysis(
-                target_ticker="AAPL",
-                competitors=[_make_competitor()],
-                industry_rank=1,
-                industry_size=5,
-                competitive_score=50,
-                method="nonsense_method_xyz",
-            )
+    def test_unknown_value_coerced_to_default(self):
+        """LLM guard: unknown method strings are coerced to 'gics' rather than
+        crashing the flow. Mirrors the ValuationResult guard above; same
+        pattern, different default."""
+        c = CompetitorAnalysis(
+            target_ticker="AAPL",
+            competitors=[_make_competitor()],
+            industry_rank=1,
+            industry_size=5,
+            competitive_score=50,
+            method="nonsense_method_xyz",
+        )
+        assert c.method == "gics"
+
+    def test_verbose_llm_description_coerced_to_default(self):
+        """Real failure mode observed: LLM returns a verbose description
+        ('Multi-factor weighted competitive adjustment (20%)') for the method
+        field. Coerced to 'gics' so the flow can continue."""
+        c = CompetitorAnalysis(
+            target_ticker="AAPL",
+            competitors=[_make_competitor()],
+            industry_rank=1,
+            industry_size=5,
+            competitive_score=50,
+            method="Multi-factor weighted competitive adjustment (20%)",
+        )
+        assert c.method == "gics"
 
 
 class TestRiskAssessmentLevelCaseInsensitive:
