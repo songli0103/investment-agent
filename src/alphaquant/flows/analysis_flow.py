@@ -60,12 +60,12 @@ DISCLAIMER_TEXT = (
     "投资有风险，决策需谨慎。"
 )
 
-# §3.4: whole-Flow timeout. 2026-06-22 widened 180→300s: real-LLM runs
-# (sub-3 revert still has 7 LLM tasks via the Crew) routinely need >180s
-# for data fetches + analysis + report synthesis. The 300s ceiling gives
-# the LLM enough headroom; the deeper fix (bypass Crew entirely) is
-# tracked as a separate refactor.
-FLOW_TIMEOUT_SECONDS = 300.0
+# §3.4: whole-Flow timeout. Sub-3 revert validation (Task 5) showed
+# MiniMax-M3 routinely needs >300s for 7 LLM tasks (AAPL hit the 300s
+# limit with 18 successful LLM calls still in progress on the cleanest
+# run). Widening 300→600s restores the original spec ceiling and gives
+# the LLM enough headroom for real-world latency.
+FLOW_TIMEOUT_SECONDS = 600.0
 
 
 # Maps crew task descriptions to AnalysisState field keys. The order MUST

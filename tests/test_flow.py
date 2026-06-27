@@ -557,12 +557,14 @@ class TestFlowKickoff:
         sample_financial,
         sample_competitor_analysis,
     ):
-        """§3.4: kickoff_with_timeout returns within 300s for a fast flow.
+        """§3.4: kickoff_with_timeout returns within 600s for a fast flow.
 
         Sub-project 2: tool _run methods are mocked instead of registry.
 
         Sub-project 3: include Pydantic instances in tasks_output 4-7.
         Sub-project 3 (revised): FLOW_TIMEOUT_SECONDS raised from 180 to 300.
+        Sub-project 3 (follow-up): widened 300 → 600 after Task 5 showed
+        real-LLM latency routinely exceeds 300s.
         """
         flow = AnalysisFlow()
 
@@ -601,10 +603,12 @@ class TestFlowKickoff:
         assert flow.state.report.ticker == "AAPL"
 
     def test_kickoff_with_timeout_enforces_limit(self):
-        """§3.4: a slow kickoff_async → asyncio.TimeoutError after 300s.
+        """§3.4: a slow kickoff_async → asyncio.TimeoutError after 600s.
 
         We patch FLOW_TIMEOUT_SECONDS to a tiny value so the test runs quickly.
         Sub-project 3 (revised): default raised from 120 to 300.
+        Sub-project 3 (follow-up): widened 300 → 600 after Task 5 showed
+        real-LLM latency routinely exceeds 300s.
         """
         import time
 
@@ -1326,10 +1330,12 @@ class TestGracefulDegradation:
 class TestFlowConfigConstants:
     """Verify sub-3-revert constant values on the Flow module."""
 
-    def test_flow_timeout_seconds_is_300(self):
-        """Sub-3 revert spec: FLOW_TIMEOUT_SECONDS raised from 180 to 300 to
-        accommodate real-LLM latency observed during sub-2 (MSFT/TSLA hit
-        the 180s limit while generating the risk rationale)."""
+    def test_flow_timeout_seconds_is_600(self):
+        """Sub-3 revert follow-up: FLOW_TIMEOUT_SECONDS widened 300 → 600
+        after Task 5 validation showed MiniMax-M3 routinely needs >300s
+        for 7 LLM tasks (AAPL hit the 300s limit with 18 successful LLM
+        calls still in progress on the cleanest run). 600s restores the
+        original sub-3 spec ceiling."""
         from alphaquant.flows.analysis_flow import FLOW_TIMEOUT_SECONDS
 
-        assert FLOW_TIMEOUT_SECONDS == 300.0
+        assert FLOW_TIMEOUT_SECONDS == 600.0
