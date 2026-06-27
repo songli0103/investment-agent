@@ -18,6 +18,9 @@ from alphaquant.interfaces.frontend.components.metrics_panel import render_metri
 from alphaquant.interfaces.frontend.components.rating_card import render_rating_card
 from alphaquant.infrastructure.persistence import DB
 from alphaquant.main import run_analysis_async
+from alphaquant.observability import get_logger
+
+log = get_logger("alphaquant.frontend.analyze")
 
 
 st.title("Analyze")
@@ -72,6 +75,12 @@ if submitted:
         st.error(
             "All data sources are currently unavailable. "
             "Please try again in a few minutes."
+        )
+    except Exception:
+        log.exception("analyze_unexpected_error", ticker=ticker)
+        st.error(
+            "An unexpected error occurred while running the analysis. "
+            "Please try again, or check the server logs if the problem persists."
         )
     else:
         db.insert_report(ticker, report)
