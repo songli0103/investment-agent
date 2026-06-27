@@ -10,7 +10,7 @@ from alphaquant.models.financial import (
 )
 from alphaquant.models.market import MarketData
 from alphaquant.models.news import NewsAnalysis, NewsItem
-from alphaquant.models.report import InvestmentReport
+from alphaquant.models.report import InvestmentReport, ReportWriterOutput
 from alphaquant.models.risk import RiskAssessment, RiskScore
 from alphaquant.models.valuation import ValuationResult
 
@@ -24,6 +24,7 @@ __all__ = [
     "IncomeStatement",
     "CashFlowStatement",
     "InvestmentReport",
+    "ReportWriterOutput",
     "MarketData",
     "NewsAnalysis",
     "NewsItem",

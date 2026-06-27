@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
-from pydantic import BaseModel, Field
+from typing import Any, Literal
+from pydantic import BaseModel, Field, field_validator
 
 from alphaquant.models.company import Company
 from alphaquant.models.competitor import CompetitorAnalysis
@@ -12,6 +12,30 @@ from alphaquant.models.market import MarketData
 from alphaquant.models.news import NewsAnalysis
 from alphaquant.models.risk import RiskAssessment
 from alphaquant.models.valuation import ValuationResult
+
+
+class ReportWriterOutput(BaseModel):
+    """LLM-produced subset of InvestmentReport. Sub-project-3 revert: the
+    structured analysis fields (competitors, risk, valuation) are computed
+    deterministically by the flow; the LLM only produces the synthesis fields
+    below. The flow assembles the full ``InvestmentReport`` by combining this
+    with data fields and the deterministic analyses.
+    """
+
+    rating: Literal["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
+    confidence: int | None = Field(None, ge=0, le=100)
+    investment_horizon: Literal["short", "medium", "long"] = "medium"
+    catalysts: list[str] = Field(default_factory=list)
+    markdown: str = Field(..., min_length=1)
+
+    @field_validator("rating", mode="before")
+    @classmethod
+    def _coerce_rating(cls, v: Any) -> Any:
+        """LLM guard: coerce unknown rating values to 'Hold' so the flow
+        does not crash. See ``CompetitorAnalysis._coerce_method`` for the
+        established pattern."""
+        allowed = {"Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"}
+        return v if v in allowed else "Hold"
 
 
 class InvestmentReport(BaseModel):
