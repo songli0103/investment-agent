@@ -512,8 +512,17 @@ def _extract_data_field(
       1. Empty / whitespace-only → failure
       2. Starts with "Error" / "No " / contains "data available" → failure
          (matches the error-string convention used by all 5 data tools)
-      3. Try ``model_cls.model_validate_json``; on ValidationError → failure
-      4. Otherwise → success, return parsed model
+      3. JSON-array wrapping (CrewAI's manager LLM emits tool-call traces as
+         ``[{"ticker": ...}, {"error": "..."}]``); unwrap to the first object
+      4. JSON object containing a top-level ``"error"`` key → failure (the
+         upstream tool returned an error and the manager LLM wrapped it in
+         a structured object instead of propagating the error string)
+      5. Try ``model_cls.model_validate_json``; on ValidationError → failure
+      6. Degenerate-Company shell check: a successful Company with
+         ``market_cap == 0`` and ``sector in {"Unknown", ""}`` is almost
+         certainly an LLM hallucination (the real Yahoo/AlphaVantage/
+         Finnhub/SECEdgar sources always populate these from real data)
+      7. Otherwise → success, return parsed model
 
     Returns ``(model, None)`` on success or ``(None, error_msg)`` on failure.
     """
@@ -528,10 +537,47 @@ def _extract_data_field(
         or "data available" in lowered
     ):
         return None, error_msg
+    # JSON-array wrapping: the CrewAI hierarchical manager LLM emits each
+    # task's tool-call trace as a JSON array of objects (e.g. the "Repaired
+    # JSON" debug lines from sub-3 Task 5). Unwrap to the first object so
+    # ``model_validate_json`` can attempt validation against it.
+    if raw.startswith("["):
+        try:
+            arr = json.loads(raw)
+            if isinstance(arr, list) and arr:
+                raw = json.dumps(arr[0])
+            # An empty array → no payload → treat as failure
+            else:
+                return None, error_msg
+        except Exception:
+            return None, error_msg
+    # JSON object with a top-level "error" key: the upstream tool failed and
+    # the manager LLM surfaced that as a structured object. Treat as failure
+    # so the company_fetch path raises AllDataSourcesDown instead of
+    # proceeding with a degenerate shell.
+    if raw.startswith("{"):
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict) and "error" in obj:
+                return None, error_msg
+        except Exception:
+            return None, error_msg
     try:
-        return model_cls.model_validate_json(raw), None
+        model = model_cls.model_validate_json(raw)
     except Exception:
         return None, error_msg
+    # Degenerate-Company shell: a Company that validates but has zero
+    # market cap AND a placeholder sector is almost certainly an LLM
+    # hallucination (real data sources always populate these from real
+    # data). Treat as failure so the company_fetch path raises
+    # AllDataSourcesDown.
+    if (
+        model_cls is Company
+        and getattr(model, "market_cap", 1) == 0
+        and getattr(model, "sector", "") in {"Unknown", ""}
+    ):
+        return None, error_msg
+    return model, None
 
 
 class AnalysisFlow(Flow[AnalysisState]):

@@ -1321,6 +1321,130 @@ class TestGracefulDegradation:
         # surface a user-friendly error (see Task 4 brief expected output).
         assert "ZZZZZZ" in str(exc_info.value)
 
+    def test_unknown_ticker_manager_json_array_raises_all_data_sources_down(self):
+        """Sub-3 follow-up Blocker B: real LLM wraps tool error in JSON array.
+
+        Task 5 validation found the CrewAI hierarchical manager LLM emits
+        tool-call traces as a JSON array of objects, e.g.
+        ``[{"ticker": "ZZZZZZ"}, {"error": "No data found for ticker ZZZZZZ..."}]``.
+        The mock-LLM ``test_unknown_ticker_raises_all_data_sources_down``
+        above only covers the tool's error-string path. We add this test
+        to cover the real-LLM array-wrapped path so a regression in
+        ``_extract_data_field`` is caught by unit tests.
+        """
+        from alphaquant.exceptions import AllDataSourcesDown
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+
+        class _FakeTask:
+            def __init__(self, raw=""):
+                self.pydantic = None
+                self.raw = raw
+
+        # Real LLM manager output observed in /tmp/zzzzzz.stdout line 18-21
+        company_array = (
+            '[{"ticker": "ZZZZZZ"}, '
+            '{"error": "No data found for ticker ZZZZZZ. Please check '
+            'if the ticker is valid or try a different ticker symbol."}]'
+        )
+
+        class _FakeResult:
+            tasks_output = [
+                _FakeTask(raw=company_array),  # company_resolver
+                _FakeTask(raw=""),            # market_analyst
+                _FakeTask(raw="[]"),          # news_analyst
+                _FakeTask(raw=""),            # financial_analyst
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+            ]
+
+        state = AnalysisState(ticker="ZZZZZZ")
+        with pytest.raises(AllDataSourcesDown) as exc_info:
+            parse_crew_output(_FakeResult(), state)
+        assert "ZZZZZZ" in str(exc_info.value)
+
+    def test_unknown_ticker_degenerate_company_shell_raises_all_data_sources_down(self):
+        """Sub-3 follow-up Blocker B: LLM hallucinates a complete-but-empty shell.
+
+        If the manager LLM produces a JSON object that *does* parse as a
+        valid ``Company`` but has ``market_cap=0`` AND ``sector="Unknown"``
+        (placeholder values), it's almost certainly a hallucination. The
+        degenerate-Company detector in ``_extract_data_field`` must
+        reject these so ``parse_crew_output`` raises ``AllDataSourcesDown``.
+        """
+        from alphaquant.exceptions import AllDataSourcesDown
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+
+        class _FakeTask:
+            def __init__(self, raw=""):
+                self.pydantic = None
+                self.raw = raw
+
+        # LLM hallucinates a Company shell that validates but is degenerate.
+        # Uses ticker="FAKE" (5 chars, passes the pattern) so it parses,
+        # but market_cap=0 + sector="Unknown" flags it as a hallucination.
+        degenerate_shell = (
+            '{"ticker": "FAKE", "name": "FAKE Corp", "exchange": "NASDAQ", '
+            '"sector": "Unknown", "industry": "Unknown", "market_cap": 0}'
+        )
+
+        class _FakeResult:
+            tasks_output = [
+                _FakeTask(raw=degenerate_shell),  # company_resolver
+                _FakeTask(raw=""),               # market_analyst
+                _FakeTask(raw="[]"),             # news_analyst
+                _FakeTask(raw=""),               # financial_analyst
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+            ]
+
+        state = AnalysisState(ticker="FAKE")
+        with pytest.raises(AllDataSourcesDown) as exc_info:
+            parse_crew_output(_FakeResult(), state)
+        assert "FAKE" in str(exc_info.value)
+
+    def test_real_company_with_unknown_sector_passes(self):
+        """Sub-3 follow-up: a real Company with sector='Unknown' but real market_cap must pass.
+
+        Sanity check that the degenerate-Company detector doesn't produce
+        false positives for legitimate companies that happen to have a
+        placeholder sector string. AAPL has both a real market cap and a
+        real sector, so it should pass.
+        """
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+
+        class _FakeTask:
+            def __init__(self, raw=""):
+                self.pydantic = None
+                self.raw = raw
+
+        aapl = (
+            '{"ticker": "AAPL", "name": "Apple Inc.", "exchange": "NASDAQ", '
+            '"sector": "Technology", "industry": "Consumer Electronics", '
+            '"market_cap": 3000000000000}'
+        )
+
+        class _FakeResult:
+            tasks_output = [
+                _FakeTask(raw=aapl),
+                _FakeTask(raw=""),
+                _FakeTask(raw="[]"),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+            ]
+
+        state = AnalysisState(ticker="AAPL")
+        parse_crew_output(_FakeResult(), state)
+        assert state.company is not None
+        assert state.company.ticker == "AAPL"
+        assert state.company.market_cap == 3000000000000
+
 
 # ---------------------------------------------------------------------------
 # Sub-3 revert: Flow configuration constants
