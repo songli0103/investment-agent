@@ -472,35 +472,6 @@ def parse_crew_output(
     return extracted
 
 
-def _extract_pydantic_field(
-    tasks_output: list[Any],
-    idx: int,
-    key: str,
-    model_cls: type[BaseModel],
-    state: "AnalysisState",
-) -> BaseModel | None:
-    """从 CrewAI 任务输出中提取 Pydantic 模型。
-
-    当任务配置了 ``output_pydantic=...`` 时,CrewAI 0.203.2 会将 ``task_out.pydantic``
-    设置为已校验的模型实例。根据子项目 3 的决定(严格无回退),我们只读取该属性。
-    如果缺失或不是预期的模型类型,则将 "<key>_unavailable" 追加到 state.errors
-    并返回 None。我们不会尝试通过解析 task_out.raw 来恢复。
-
-    返回模型实例,任何失败情况下返回 ``None``。
-    """
-    if idx >= len(tasks_output):
-        state.errors.append(f"{key}_unavailable")
-        return None
-    task_out = tasks_output[idx]
-
-    pyd_obj = getattr(task_out, "pydantic", None)
-    if isinstance(pyd_obj, model_cls):
-        return pyd_obj
-
-    state.errors.append(f"{key}_unavailable")
-    return None
-
-
 def _extract_writer_output(
     tasks_output: list[Any],
     idx: int,

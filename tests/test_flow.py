@@ -18,11 +18,10 @@ from alphaquant.exceptions import InvalidTickerFormat
 from alphaquant.flows import AnalysisFlow, AnalysisState
 from alphaquant.models.competitor import Competitor, CompetitorAnalysis
 from alphaquant.models.company import Company
-from alphaquant.models.financial import BalanceSheet, CashFlowStatement, FinancialStatements, IncomeStatement
+from alphaquant.models.financial import BalanceSheet, FinancialStatements, IncomeStatement
 from alphaquant.models.market import MarketData
 from alphaquant.models.news import NewsAnalysis
-from alphaquant.models.risk import RiskAssessment, RiskScore
-from alphaquant.models.valuation import ValuationResult
+from alphaquant.models.risk import RiskScore
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +85,10 @@ def _build_fake_task_output(
 ) -> list:
     """Build a fake tasks_output list for AnalysisCrew.kickoff mocks.
 
-    Sub-project 3: tasks 0-3 produce JSON raw text (still parsed by the data
-    pipeline), tasks 4-7 produce Pydantic instances via task_out.pydantic
-    (parsed by _extract_pydantic_field).
+    Sub-project 3 revert: tasks 0-3 produce JSON raw text (parsed by
+    _extract_data_field), tasks 4-7 produce plain text (report_writer's text
+    is scanned for JSON by _extract_writer_output; competitor/risk/valuation
+    are computed deterministically in synthesize_report).
     """
     from alphaquant.models.risk import RiskAssessment
     from alphaquant.models.valuation import ValuationResult
@@ -1443,91 +1443,6 @@ class TestParseCrewOutput:
         parse_crew_output(_FakeResult(), state)
         assert state.writer_output is None
         assert "report_writer_unavailable" in state.errors
-
-
-class TestExtractPydanticField:
-    """_extract_pydantic_field: read task_out.pydantic → model or None + error."""
-
-    def test_returns_pydantic_instance_from_task_output(self):
-        from alphaquant.flows.analysis_flow import _extract_pydantic_field
-        from alphaquant.models.competitor import CompetitorAnalysis
-        from alphaquant.flows.analysis_flow import AnalysisState
-
-        ca = CompetitorAnalysis(
-            target_ticker="AAPL",
-            competitors=[
-                Competitor(
-                    ticker="MSFT",
-                    name="Microsoft",
-                    market_cap=2_500_000_000_000,
-                    revenue_ttm=Decimal("200000000000"),
-                )
-            ],
-            industry_rank=1,
-            industry_size=5,
-            competitive_score=50,
-            strengths=["x"],
-            weaknesses=["y"],
-            method="gics",
-        )
-
-        class _FakeTask:
-            pydantic = ca
-            raw = ""
-
-        state = AnalysisState(ticker="AAPL")
-        result = _extract_pydantic_field(
-            [_FakeTask(), _FakeTask()], 0, "competitor_analyst", CompetitorAnalysis, state
-        )
-        assert result is ca
-        assert state.errors == []
-
-    def test_missing_pydantic_attribute_appends_error(self):
-        from alphaquant.flows.analysis_flow import _extract_pydantic_field
-        from alphaquant.models.competitor import CompetitorAnalysis
-        from alphaquant.flows.analysis_flow import AnalysisState
-
-        class _FakeTask:
-            raw = "not a model"
-
-        state = AnalysisState(ticker="AAPL")
-        result = _extract_pydantic_field(
-            [_FakeTask()], 0, "competitor_analyst", CompetitorAnalysis, state
-        )
-        assert result is None
-        assert "competitor_analyst_unavailable" in state.errors
-
-    def test_idx_out_of_range_appends_error(self):
-        from alphaquant.flows.analysis_flow import _extract_pydantic_field
-        from alphaquant.models.competitor import CompetitorAnalysis
-        from alphaquant.flows.analysis_flow import AnalysisState
-
-        class _FakeTask:
-            pydantic = None
-            raw = ""
-
-        state = AnalysisState(ticker="AAPL")
-        result = _extract_pydantic_field(
-            [_FakeTask()], 5, "competitor_analyst", CompetitorAnalysis, state
-        )
-        assert result is None
-        assert "competitor_analyst_unavailable" in state.errors
-
-    def test_wrong_type_appends_error(self):
-        from alphaquant.flows.analysis_flow import _extract_pydantic_field
-        from alphaquant.models.competitor import CompetitorAnalysis
-        from alphaquant.flows.analysis_flow import AnalysisState
-
-        class _FakeTask:
-            pydantic = "not a model"
-            raw = ""
-
-        state = AnalysisState(ticker="AAPL")
-        result = _extract_pydantic_field(
-            [_FakeTask()], 0, "competitor_analyst", CompetitorAnalysis, state
-        )
-        assert result is None
-        assert "competitor_analyst_unavailable" in state.errors
 
 
 class TestExtractDataField:
