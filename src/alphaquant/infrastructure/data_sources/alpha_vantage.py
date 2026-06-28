@@ -80,7 +80,6 @@ class AlphaVantageSource(DataSourceInterface):
             return None
         from alphaquant.models.financial import (
             BalanceSheet,
-            CashFlowStatement,
             IncomeStatement,
         )
 

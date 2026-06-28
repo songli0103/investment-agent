@@ -21,8 +21,3 @@ app = FastAPI(
     version=VERSION,
 )
 app.include_router(router, prefix="/api/v1")
-
-
-# 重新导出共享核心,以便现有的
-# ``alphaquant.main.run_analysis`` / ``alphaquant.main.run_analysis_async`` 导入继续工作。
-from alphaquant.core import run_analysis, run_analysis_async  # noqa: E402,F401

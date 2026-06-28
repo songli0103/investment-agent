@@ -100,7 +100,6 @@ from alphaquant.agents.report_writer import build_report_writer_agent
 from alphaquant.agents.risk_analyst import build_risk_analyst_agent
 from alphaquant.agents.valuation_analyst import build_valuation_analyst_agent
 from alphaquant.infrastructure.llm import get_llm
-from alphaquant.models.report import ReportWriterOutput
 from pydantic import BaseModel
 
 
