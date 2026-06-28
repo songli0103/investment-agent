@@ -1,4 +1,4 @@
-"""Tests for alphaquant.scoring functions."""
+"""alphaquant.scoring 函数的测试。"""
 from __future__ import annotations
 
 from decimal import Decimal

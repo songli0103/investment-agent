@@ -1,7 +1,7 @@
-"""Tests for optional InvestmentReport.confidence field.
+"""InvestmentReport.confidence 字段可选的测试。
 
-Sub-plan for confidence-rubric spec (b0308df). confidence becomes int | None
-so the LLM can return null when it cannot justify a number.
+confidence-rubric 规范(b0308df)的子计划。confidence 变为 int | None,
+以便当 LLM 无法证明一个数字时返回 null。
 """
 from __future__ import annotations
 

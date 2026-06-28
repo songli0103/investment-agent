@@ -1,7 +1,6 @@
 """Pydantic models for AlphaQuant I/O."""
 from alphaquant.models.company import Company
 from alphaquant.models.competitor import Competitor, CompetitorAnalysis
-from alphaquant.models.errors import ErrorResponse
 from alphaquant.models.financial import (
     BalanceSheet,
     CashFlowStatement,
@@ -19,7 +18,6 @@ __all__ = [
     "Company",
     "Competitor",
     "CompetitorAnalysis",
-    "ErrorResponse",
     "FinancialStatements",
     "IncomeStatement",
     "CashFlowStatement",

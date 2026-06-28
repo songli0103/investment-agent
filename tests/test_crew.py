@@ -1,4 +1,4 @@
-"""Tests for alphaquant.crews.AnalysisCrew."""
+"""alphaquant.crews.AnalysisCrew 的测试。"""
 from __future__ import annotations
 
 import pytest
@@ -142,14 +142,14 @@ class TestAnalysisCrew:
 
         # Each agent's builder is identifiable via its role.
         role_to_builder = {
-            "Company Identification Specialist": build_company_resolver_agent,
-            "Market Data Specialist": build_market_analyst_agent,
-            "News Retrieval Specialist": build_news_analyst_agent,
-            "Financial Statements Specialist": build_financial_analyst_agent,
-            "Competitive Landscape Analyst": build_competitor_analyst_agent,
-            "Risk Assessment Specialist": build_risk_analyst_agent,
-            "Sell-side Valuation Modeler": build_valuation_analyst_agent,
-            "Investment Report Synthesizer": build_report_writer_agent,
+            "公司识别专员": build_company_resolver_agent,
+            "市场数据专员": build_market_analyst_agent,
+            "新闻检索专员": build_news_analyst_agent,
+            "财务报表专员": build_financial_analyst_agent,
+            "竞争格局分析师": build_competitor_analyst_agent,
+            "风险评估专员": build_risk_analyst_agent,
+            "卖方估值建模师": build_valuation_analyst_agent,
+            "投资报告合成器": build_report_writer_agent,
         }
         for agent in crew.agents:
             builder = role_to_builder[agent.role]
@@ -212,8 +212,12 @@ class TestAnalysisCrew:
         assert _TASK_TEMPLATES[4][2] is None
         assert _TASK_TEMPLATES[5][2] is None
         assert _TASK_TEMPLATES[6][2] is None
-        # Report writer: produces slim ReportWriterOutput (Flow assembles full report)
-        assert _TASK_TEMPLATES[7][2] is ReportWriterOutput
+        # Report writer: text-only JSON (Flow parses the JSON into
+        # ReportWriterOutput). output_pydantic is intentionally NOT set
+        # because the CrewAI hierarchical manager's Pydantic converter
+        # requires an ``agent`` arg that isn't provided in manager-dispatched
+        # tasks ("Agent must be provided if converter_cls is not specified").
+        assert _TASK_TEMPLATES[7][2] is None
 
     def test_async_task_indices_cover_data_and_analysis_not_report(self):
         """_ASYNC_TASK_INDICES must cover 0-6 (data + analysis), not 7 (report writer)."""
@@ -279,12 +283,18 @@ class TestAnalysisCrew:
             crew = _AC()
         assert getattr(crew.tasks[6], "output_pydantic", None) is None
 
-    def test_report_writer_task_has_output_pydantic(self):
+    def test_report_writer_task_has_no_output_pydantic(self):
+        """Sub-3-followup: report_writer outputs raw text (not Pydantic).
+        The Flow parses the JSON payload from ``task_out.raw`` to recover
+        the ``ReportWriterOutput`` (see ``_extract_writer_output``).
+        The hierarchical manager's Pydantic converter fails with
+        "Agent must be provided if converter_cls is not specified", so we
+        don't use ``output_pydantic`` here.
+        """
         from alphaquant.crews.analysis_crew import AnalysisCrew as _AC
-        from alphaquant.models.report import ReportWriterOutput
         from unittest.mock import patch
         from tests.conftest import _FakeLLM
         fake = _FakeLLM()
         with patch("alphaquant.crews.analysis_crew.get_llm", return_value=fake):
             crew = _AC()
-        assert getattr(crew.tasks[7], "output_pydantic", None) is ReportWriterOutput
+        assert getattr(crew.tasks[7], "output_pydantic", None) is None

@@ -1,7 +1,6 @@
 """Alpha Vantage adapter."""
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 

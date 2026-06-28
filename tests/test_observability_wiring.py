@@ -1,12 +1,12 @@
-"""Tests for Task 21: wiring observability into main + flow.
+"""Task 21 的测试:将可观测性连接到 main + flow。
 
-These tests verify that:
-- Importing ``alphaquant.main`` configures structlog (idempotently).
-- ``run_analysis_async`` emits ``analysis_started`` / ``analysis_completed``
-  structured log events.
-- The Flow emits ``flow_step_started`` / ``flow_step_completed`` events for
-  each of the 6 orchestration steps.
-- ``kickoff_with_timeout`` emits a ``flow_timeout`` event on timeout.
+这些测试验证:
+- 导入 ``alphaquant.main`` 会(幂等地)配置 structlog。
+- ``run_analysis_async`` 发出 ``analysis_started`` / ``analysis_completed``
+  结构化日志事件。
+- Flow 为 6 个编排步骤中的每一个发出 ``flow_step_started`` /
+  ``flow_step_completed`` 事件。
+- ``kickoff_with_timeout`` 在超时时发出 ``flow_timeout`` 事件。
 """
 from __future__ import annotations
 
@@ -201,7 +201,7 @@ def test_run_analysis_async_emits_started_and_completed(captured_logs):
         flow_instance = MockFlow.return_value
         flow_instance.state.report = report
 
-        async def _fake_kickoff_with_timeout(inputs):
+        async def _fake_kickoff_with_timeout(inputs, progress_callback=None):
             return None
 
         flow_instance.kickoff_with_timeout = _fake_kickoff_with_timeout
@@ -228,7 +228,7 @@ def test_run_analysis_async_emits_no_report_event(captured_logs):
         flow_instance = MockFlow.return_value
         flow_instance.state.report = None
 
-        async def _fake_kickoff_with_timeout(inputs):
+        async def _fake_kickoff_with_timeout(inputs, progress_callback=None):
             return None
 
         flow_instance.kickoff_with_timeout = _fake_kickoff_with_timeout

@@ -1,18 +1,18 @@
-"""Test widened Pydantic model Literal constraints discovered during sub-3 Step 0.
+"""测试在子项目 3 第 0 步发现的已放宽的 Pydantic 模型 Literal 约束。
 
-Sub-3 Step 0 (AAPL real LLM run, log /tmp/sub3-blocker1-aapl.log) showed the LLM
-producing non-canonical method strings:
+子项目 3 第 0 步(AAPL 真实 LLM 运行,日志 /tmp/sub3-blocker1-aapl.log)显示
+LLM 会产出非规范的 method 字符串:
 
-- ValuationResult.method: LLM produced "blended" — original Literal only allowed
-  ["dcf_relative_peg", "relative_only"]. Widened to include "blended",
-  "dcf_only", "relative", "dcf_relative_blended".
+- ValuationResult.method:LLM 产出 "blended" —— 原 Literal 仅允许
+  ["dcf_relative_peg", "relative_only"]。已放宽以包含 "blended"、
+  "dcf_only"、"relative"、"dcf_relative_blended"。
 
-- CompetitorAnalysis.method: LLM produced "hybrid" — original Literal only allowed
-  ["gics", "keyword", "manual", "fallback"]. Widened to include "hybrid",
-  "multi_factor", "peer_comparison".
+- CompetitorAnalysis.method:LLM 产出 "hybrid" —— 原 Literal 仅允许
+  ["gics"、"keyword"、"manual"、"fallback"]。已放宽以包含 "hybrid"、
+  "multi_factor"、"peer_comparison"。
 
-These tests pin the widened Literals so future regressions are caught at unit-test
-time rather than at real-LLM runtime.
+这些测试固定放宽后的 Literal,以便在单元测试时(而非真实 LLM 运行时)
+捕获未来的回归。
 """
 from __future__ import annotations
 

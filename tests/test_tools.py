@@ -1,4 +1,4 @@
-"""Tests for alphaquant.tools CrewAI wrappers."""
+"""alphaquant.tools CrewAI 包装器的测试。"""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -16,20 +16,8 @@ from alphaquant.tools.news_tool import NewsTool
 
 
 # ---------------------------------------------------------------------------
-# Smoke: imports + tool attributes
+# Tool attributes
 # ---------------------------------------------------------------------------
-
-def test_tools_importable():
-    """All six tool classes import from alphaquant.tools."""
-    from alphaquant.tools import (  # noqa: F401
-        CompetitorTool,
-        CompanyLookupTool,  # NEW sub-2
-        DCFTool,
-        FinancialTool,
-        MarketDataTool,
-        NewsTool,
-    )
-
 
 class TestToolMetadata:
     @pytest.mark.parametrize(
@@ -83,9 +71,9 @@ class TestMarketDataInput:
 class TestDCFTool:
     def test_returns_default_assumptions(self):
         result = DCFTool()._run("AAPL")
-        assert "Growth rate" in result
+        assert "增长率" in result
         assert "WACC" in result
-        assert "Terminal growth" in result
+        assert "终值增长率" in result
 
     def test_ignores_ticker(self):
         a = DCFTool()._run("AAPL")

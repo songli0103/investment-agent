@@ -1,4 +1,4 @@
-"""Tests for alphaquant.agents builder functions."""
+"""alphaquant.agents 构建器函数的测试。"""
 from __future__ import annotations
 
 from unittest.mock import MagicMock

@@ -1,13 +1,12 @@
-"""Compare page: side-by-side analysis of up to 5 tickers.
+"""对比页面:最多 5 个 ticker 的并排分析。
 
-Runs ``run_analysis_async`` concurrently for each ticker, persists successful
-reports to the local SQLite history DB, then renders:
+为每个 ticker 并发运行 ``run_analysis_async``,将成功的报告
+持久化到本地 SQLite 历史数据库,然后渲染:
 
-- A row of rating cards (one per successful ticker).
-- A side-by-side metrics table for key metrics (price, P/E, market cap, confidence).
-- An overlaid radar chart using the same 5 axes as ``render_risk_radar``.
-- A short verdict identifying the ticker with the best rating and the highest
-  confidence.
+- 一排评级卡片(每个成功的 ticker 一张)。
+- 一张关键指标的并排指标表(价格、市盈率、市值、置信度)。
+- 一张使用与 ``render_risk_radar`` 相同 5 个轴的叠加雷达图。
+- 一段简短的结论,标识最佳评级和最高置信度的 ticker。
 """
 from __future__ import annotations
 
@@ -34,10 +33,10 @@ from alphaquant.main import run_analysis_async
 from alphaquant.models.report import InvestmentReport
 
 
-st.title("Compare")
+st.title("对比")
 st.write(
-    "Enter up to 5 tickers (comma-separated) to run analyses in parallel and "
-    "compare the resulting ratings, metrics, and risk profiles side by side."
+    "输入最多 5 个 ticker(逗号分隔)以并行运行分析,"
+    "并并排对比生成的评级、指标和风险概览。"
 )
 
 
@@ -49,16 +48,16 @@ db.init()
 
 
 def _parse_tickers(raw: str) -> list[str]:
-    """Split a comma-separated string into a normalized, de-duplicated list.
+    """将逗号分隔的字符串切分为标准化、去重的列表。
 
-    Rules:
-    - Strip whitespace, uppercase, drop empties.
-    - Cap at ``MAX_TICKERS`` entries (extras are dropped silently; we validate
-      separately via ``st.warning`` so the user knows).
+    规则:
+    - 去除空白、大写、丢弃空项。
+    - 上限 ``MAX_TICKERS`` 个条目(超出部分静默丢弃;
+      另行通过 ``st.warning`` 校验,告知用户)。
     """
     parts = [p.strip().upper() for p in raw.split(",")]
     parts = [p for p in parts if p]
-    # De-duplicate while preserving order.
+    # 去重同时保持顺序。
     seen: set[str] = set()
     unique: list[str] = []
     for p in parts:
@@ -69,11 +68,10 @@ def _parse_tickers(raw: str) -> list[str]:
 
 
 async def _compare_all(tickers: list[str]) -> list[InvestmentReport | BaseException]:
-    """Run ``run_analysis_async`` concurrently for every ticker.
+    """为每个 ticker 并发运行 ``run_analysis_async``。
 
-    ``return_exceptions=True`` ensures one bad ticker does not abort the rest
-    of the comparison. The caller is responsible for filtering out the
-    exception results before persisting or rendering.
+    ``return_exceptions=True`` 保证单个 ticker 失败不会中断其他 ticker
+    的对比。调用方负责在持久化或渲染前过滤掉异常结果。
     """
     results = await asyncio.gather(
         *(run_analysis_async(t) for t in tickers), return_exceptions=True
@@ -82,19 +80,19 @@ async def _compare_all(tickers: list[str]) -> list[InvestmentReport | BaseExcept
 
 
 def _build_metrics_row(report: InvestmentReport) -> dict[str, Any]:
-    """Extract a small set of comparison-friendly metrics from a report."""
+    """从报告中提取一小组便于对比的指标。"""
     market = report.market
     return {
-        "Price": float(market.price) if market.price is not None else None,
-        "Market Cap": market.market_cap,
-        "P/E": market.pe_ratio,
-        "Confidence": report.confidence,
+        "价格": float(market.price) if market.price is not None else None,
+        "市值": market.market_cap,
+        "市盈率": market.pe_ratio,
+        "置信度": report.confidence,
     }
 
 
 def _build_overlay_radar(reports: list[InvestmentReport]) -> go.Figure:
-    """Return a single Figure with one Scatterpolar trace per report."""
-    # Close the polygon by repeating the first axis/value.
+    """返回一个 Figure,每个报告对应一条 Scatterpolar 轨迹。"""
+    # 通过重复第一个轴/值闭合多边形。
     closed_axes = RADAR_AXES + [RADAR_AXES[0]]
 
     palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
@@ -115,7 +113,7 @@ def _build_overlay_radar(reports: list[InvestmentReport]) -> go.Figure:
     fig.update_layout(
         polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
         showlegend=True,
-        title="Risk Profile Comparison",
+        title="风险概览对比",
         margin=dict(l=40, r=40, t=60, b=40),
     )
     return fig
@@ -135,10 +133,10 @@ def _format_market_cap(value: int | None) -> str:
 
 with st.form(key="compare_form", clear_on_submit=False):
     tickers_input = st.text_input(
-        "Tickers (comma-separated, max 5)",
+        "Ticker(逗号分隔,最多 5 个)",
         value="AAPL, MSFT, GOOGL",
     )
-    submitted = st.form_submit_button("Compare", type="primary")
+    submitted = st.form_submit_button("对比", type="primary")
 
 if not submitted:
     st.stop()
@@ -146,20 +144,19 @@ if not submitted:
 tickers = _parse_tickers(tickers_input)
 
 if not tickers:
-    st.error("Please enter at least one ticker.")
+    st.error("请至少输入一个 ticker。")
     st.stop()
 
 if len(tickers) > MAX_TICKERS:
     st.warning(
-        f"More than {MAX_TICKERS} tickers supplied; only the first "
-        f"{MAX_TICKERS} will be analyzed."
+        f"输入的 ticker 超过 {MAX_TICKERS} 个;只会分析前 {MAX_TICKERS} 个。"
     )
     tickers = tickers[:MAX_TICKERS]
 
-with st.spinner(f"Running analysis for {', '.join(tickers)}..."):
+with st.spinner(f"正在分析 {', '.join(tickers)}..."):
     results = asyncio.run(_compare_all(tickers))
 
-# Split into successes and per-ticker failures.
+# 拆分为成功结果和逐 ticker 的失败。
 successful: list[InvestmentReport] = []
 failures: list[tuple[str, BaseException]] = []
 for ticker, result in zip(tickers, results):
@@ -169,64 +166,66 @@ for ticker, result in zip(tickers, results):
     successful.append(result)
     try:
         db.insert_report(ticker, result)
-    except Exception as exc:  # pragma: no cover - DB write best-effort
+    except Exception as exc:  # pragma: no cover - DB 写入尽力而为
         failures.append((ticker, exc))
 
 if not successful:
-    st.error("All ticker analyses failed. See messages below.")
+    st.error("所有 ticker 分析均失败。详见下方消息。")
     for ticker, exc in failures:
         if isinstance(exc, TickerNotFound):
-            st.error(f"{ticker}: ticker could not be resolved.")
+            st.error(f"{ticker}:无法解析该 ticker。")
         elif isinstance(exc, InvalidTickerFormat):
-            st.error(f"{ticker}: invalid ticker format.")
+            st.error(f"{ticker}: ticker 格式无效。")
         elif isinstance(exc, AllDataSourcesDown):
-            st.error(f"{ticker}: all data sources unavailable.")
+            st.error(f"{ticker}: 所有数据源不可用。")
         else:
-            st.error(f"{ticker}: analysis failed. See server logs for details.")
+            st.error(f"{ticker}: 分析失败。请查看服务器日志了解详情。")
     st.stop()
 
-# Show any per-ticker failures (partial success path).
+# 展示逐 ticker 的失败(部分成功路径)。
 for ticker, exc in failures:
     if isinstance(exc, TickerNotFound):
-        st.error(f"{ticker}: ticker could not be resolved.")
+        st.error(f"{ticker}:无法解析该 ticker。")
     elif isinstance(exc, InvalidTickerFormat):
-        st.error(f"{ticker}: invalid ticker format.")
+        st.error(f"{ticker}: ticker 格式无效。")
     elif isinstance(exc, AllDataSourcesDown):
-        st.error(f"{ticker}: all data sources unavailable.")
+        st.error(f"{ticker}: 所有数据源不可用。")
     else:
-        st.warning(f"{ticker}: analysis failed. See server logs for details.")
+        st.warning(f"{ticker}: 分析失败。请查看服务器日志了解详情。")
 
-# Rating cards in a row of equal-width columns.
-st.subheader("Ratings")
+# 评级卡片,等宽列一排。
+st.subheader("评级")
 columns = st.columns(len(successful))
 for col, report in zip(columns, successful):
     with col:
         render_rating_card(report)
 
-# Side-by-side metrics table, indexed by ticker.
-st.subheader("Side-by-side Metrics")
+# 并排指标表,以 ticker 为索引。
+st.subheader("并排指标")
 metrics_df = pd.DataFrame(
     [_build_metrics_row(r) for r in successful],
     index=[r.ticker for r in successful],
 )
 metrics_display = metrics_df.copy()
-metrics_display["Price"] = metrics_display["Price"].apply(
+metrics_display["价格"] = metrics_display["价格"].apply(
     lambda v: f"${v:,.2f}" if v is not None else "—"
 )
-metrics_display["Market Cap"] = metrics_display["Market Cap"].apply(_format_market_cap)
-metrics_display["P/E"] = metrics_display["P/E"].apply(
+metrics_display["市值"] = metrics_display["市值"].apply(_format_market_cap)
+metrics_display["市盈率"] = metrics_display["市盈率"].apply(
     lambda v: f"{v:.2f}" if v is not None else "—"
 )
-metrics_display["Confidence"] = metrics_display["Confidence"].apply(
+metrics_display["置信度"] = metrics_display["置信度"].apply(
     lambda v: f"{int(v)}%" if v is not None else "—"
 )
-st.dataframe(metrics_display, use_container_width=True)
+st.dataframe(metrics_display, width="stretch")
 
-# Overlaid risk radar.
-st.subheader("Risk Profile Overlay")
-st.plotly_chart(_build_overlay_radar(successful), use_container_width=True)
+# 叠加的风险雷达。
+st.subheader("风险概览叠加图")
+st.plotly_chart(
+    _build_overlay_radar(successful), key="overlay_radar", width="stretch"
+)
 
-# Verdict: best rating (highest RATING_TO_NUMERIC) and highest confidence.
+# 结论:最佳评级(最高的 RATING_TO_NUMERIC)和最高置信度。
 best_rating_ticker = max(
     successful,
     key=lambda r: (
@@ -239,6 +238,6 @@ best_confidence_ticker = max(
     key=lambda r: (r.confidence if r.confidence is not None else -1),
 ).ticker
 
-st.subheader("Verdict")
-st.write(f"**Best rating:** {best_rating_ticker}")
-st.write(f"**Highest confidence:** {best_confidence_ticker}")
+st.subheader("结论")
+st.write(f"**最佳评级:** {best_rating_ticker}")
+st.write(f"**最高置信度:** {best_confidence_ticker}")

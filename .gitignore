@@ -12,3 +12,4 @@ build/
 .DS_Store
 data/*.db
 data/*.db-journal
+.ipynb_checkpoints/

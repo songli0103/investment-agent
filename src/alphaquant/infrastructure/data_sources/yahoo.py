@@ -1,4 +1,4 @@
-"""Yahoo Finance adapter using yfinance library."""
+"""使用 yfinance 库的 Yahoo Finance 适配器。"""
 from __future__ import annotations
 
 import asyncio
@@ -18,8 +18,35 @@ from alphaquant.models.market import MarketData
 from alphaquant.models.news import NewsItem
 
 
+# Yahoo 的 ``info['exchange']`` 使用内部 MIC 风格代码,这些代码不是
+# 有效的 ``Company.exchange`` 字面量(例如 ``"NMS"`` 表示 Nasdaq MarketSite,
+# ``"NYQ"`` 表示 NYSE)。将它们映射到管道其余部分预期的规范值。
+# 未知代码回退到 ``"NASDAQ"``(Yahoo 最常见的情况),这样我们仍能
+# 返回可用的 Company,而不是丢弃整条记录。
+_YAHOO_EXCHANGE_MAP: dict[str, str] = {
+    "NMS": "NASDAQ",
+    "NGM": "NASDAQ",
+    "NCM": "NASDAQ",
+    "BATS": "NASDAQ",
+    "NYQ": "NYSE",
+    "ASE": "NYSE Arca",
+    "PCX": "NYSE Arca",
+    "PNK": "OTC",
+    "OTC": "OTC",
+}
+
+
+def _normalize_yahoo_exchange(code: str | None) -> str:
+    if not code:
+        return "NASDAQ"
+    upper = code.upper()
+    if upper in {"NASDAQ", "NYSE", "NYSE Arca", "OTC"}:
+        return upper
+    return _YAHOO_EXCHANGE_MAP.get(upper, "NASDAQ")
+
+
 class YahooFinanceSource(DataSourceInterface):
-    """Yahoo Finance data source. MVP primary source."""
+    """Yahoo Finance 数据源。MVP 主要数据源。"""
 
     @property
     def name(self) -> str:
@@ -43,7 +70,7 @@ class YahooFinanceSource(DataSourceInterface):
             return Company(
                 ticker=ticker,
                 name=info.get("shortName") or info.get("longName", ticker),
-                exchange=info.get("exchange", "NASDAQ"),
+                exchange=_normalize_yahoo_exchange(info.get("exchange")),
                 sector=info.get("sector", "Unknown"),
                 industry=info.get("industry", "Unknown"),
                 market_cap=int(info.get("marketCap", 0) or 0),

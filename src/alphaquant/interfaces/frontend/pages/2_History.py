@@ -1,4 +1,4 @@
-"""History page: time-series chart and table of past reports, with CSV export."""
+"""历史页面:过去报告的时序图和表格,支持 CSV 导出。"""
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
@@ -10,10 +10,10 @@ from alphaquant.interfaces.frontend.components.charts import render_history_line
 from alphaquant.infrastructure.persistence import DB
 
 
-st.title("History")
+st.title("历史")
 st.write(
-    "Browse past analysis runs. Pick a subset of tickers and a start date in the "
-    "sidebar to narrow the view, then download the result as CSV."
+    "浏览历史分析记录。在侧边栏选择 ticker 子集和起始日期以缩小视图,"
+    "然后将结果下载为 CSV。"
 )
 
 
@@ -23,11 +23,11 @@ db.init()
 
 @st.cache_data(ttl=10)
 def _load_history(tickers: tuple[str, ...], since_iso: str | None) -> list[dict]:
-    """Cache the DB read for 10s to avoid hammering SQLite on every rerun.
+    """缓存数据库读取 10 秒,避免每次 Streamlit 重跑时反复打 SQLite。
 
-    ``tickers`` is a tuple (hashable) and ``since_iso`` is a string so the args
-    are stable across Streamlit reruns. We convert back to a list/datetime here
-    so the underlying ``DB.get_history`` sees the typed values it expects.
+    ``tickers`` 使用元组(可哈希),``since_iso`` 使用字符串,
+    以便参数在 Streamlit 重跑之间保持稳定。这里再转换回 list / datetime,
+    让底层的 ``DB.get_history`` 看到它期望的类型化值。
     """
     since_dt = datetime.fromisoformat(since_iso) if since_iso else None
     records = db.get_history(tickers=list(tickers) or None, since=since_dt)
@@ -45,34 +45,34 @@ def _load_history(tickers: tuple[str, ...], since_iso: str | None) -> list[dict]
 
 
 with st.sidebar:
-    st.header("Filters")
+    st.header("筛选")
     all_tickers = db.list_tickers()
     selected = st.multiselect(
-        "Tickers",
+        "Ticker",
         options=all_tickers,
         default=all_tickers,
-        help="Tickers with at least one stored report.",
+        help="至少有一条已存储报告的 ticker。",
     )
     today = date.today()
     default_since = today - timedelta(days=365)
-    since_date = st.date_input("Since", value=default_since, max_value=today)
+    since_date = st.date_input("起始日期", value=default_since, max_value=today)
 
-# Normalize filters and load history.
+# 标准化筛选条件并加载历史。
 since_dt = datetime.combine(since_date, time.min)
 since_iso = since_dt.isoformat()
 rows = _load_history(tuple(selected), since_iso)
 df = pd.DataFrame(rows)
 
 if df.empty:
-    st.info("No reports yet. Run Analyze first.")
+    st.info("还没有报告。请先运行分析。")
     st.stop()
 
-# Sort newest first for the table; the chart helper re-sorts internally.
+# 表格按最新时间倒序排列;绘图函数会在内部重新排序。
 df_display = df.sort_values("generated_at", ascending=False).reset_index(drop=True)
 
-# The chart wants ReportRecord-shaped objects. Re-hydrate the cache's dicts
-# into the public model so render_history_lines' type contract is satisfied.
-from alphaquant.infrastructure.persistence import ReportRecord  # local import: avoid cycles in tests
+# 绘图函数需要 ReportRecord 形状的对象。把缓存中的 dict 重新水合为
+# 公共模型,以满足 ``render_history_lines`` 的类型契约。
+from alphaquant.infrastructure.persistence import ReportRecord  # 局部导入:避免测试中循环依赖
 
 records = [
     ReportRecord(
@@ -84,34 +84,36 @@ records = [
         market_price=(
             float(row["market_price"]) if row["market_price"] is not None else None
         ),
-        report_json="",  # not needed for the chart
+        report_json="",  # 绘图不需要
     )
     for row in rows
 ]
 
-st.plotly_chart(render_history_lines(records), use_container_width=True)
+st.plotly_chart(
+    render_history_lines(records), key="history_lines", width="stretch"
+)
 
-st.subheader("History Table")
+st.subheader("历史记录表")
 
 st.dataframe(
     df_display[["generated_at", "ticker", "rating", "confidence", "market_price"]],
     hide_index=True,
-    use_container_width=True,
+    width="stretch",
     column_config={
         "generated_at": st.column_config.DatetimeColumn(
-            "Date",
+            "日期",
             format="YYYY-MM-DD HH:mm",
         ),
-        "ticker": st.column_config.TextColumn("Ticker"),
-        "rating": st.column_config.TextColumn("Rating"),
+        "ticker": st.column_config.TextColumn("股票代码"),
+        "rating": st.column_config.TextColumn("评级"),
         "confidence": st.column_config.ProgressColumn(
-            "Confidence",
+            "置信度",
             min_value=0,
             max_value=100,
             format="%d",
         ),
         "market_price": st.column_config.NumberColumn(
-            "Price",
+            "价格",
             format="$%.2f",
         ),
     },
@@ -121,7 +123,7 @@ csv_bytes = df_display[
     ["generated_at", "ticker", "rating", "confidence", "market_price"]
 ].to_csv(index=False).encode("utf-8")
 st.download_button(
-    label="Export CSV",
+    label="导出 CSV",
     data=csv_bytes,
     file_name="alphaquant_history.csv",
     mime="text/csv",

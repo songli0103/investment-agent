@@ -1,4 +1,4 @@
-"""CrewAI tool for news."""
+"""CrewAI 新闻工具。"""
 from __future__ import annotations
 
 from crewai.tools import BaseTool
@@ -11,7 +11,7 @@ TOOL_TIMEOUT_SECONDS = 30.0
 
 class NewsTool(BaseTool):
     name: str = "news_lookup"
-    description: str = "Fetch recent news (last 30 days) for a US stock ticker. Returns news items with titles, sources, dates."
+    description: str = "获取美股 ticker 的近期新闻(最近 30 天)。返回包含标题、来源、日期的新闻条目。"
 
     def _run(self, ticker: str) -> str:
         import asyncio

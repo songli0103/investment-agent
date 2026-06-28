@@ -1,4 +1,4 @@
-"""CompanyResolver Agent."""
+"""CompanyResolver 代理。"""
 from __future__ import annotations
 
 from crewai import Agent
@@ -9,13 +9,12 @@ from alphaquant.tools.company_lookup_tool import CompanyLookupTool
 
 def build_company_resolver_agent(llm: LLM) -> Agent:
     return Agent(
-        role="Company Identification Specialist",
-        goal="Validate and standardize ticker symbols, resolve company metadata.",
+        role="公司识别专员",
+        goal="验证并标准化 ticker 代码,解析公司元数据。",
         backstory=(
-            "You are a data engineer specializing in US equity identifiers. "
-            "Given a ticker, you call the company_lookup tool to retrieve "
-            "the canonical company name, exchange, sector, industry, and "
-            "market cap. You never invent data."
+            "你是一名专注于美股股票标识符的数据工程师。"
+            "给定 ticker,你调用 company_lookup 工具以获取规范的公司名称、"
+            "交易所、行业分类、细分行业和市值。你从不编造数据。"
         ),
         tools=[CompanyLookupTool()],
         llm=llm,

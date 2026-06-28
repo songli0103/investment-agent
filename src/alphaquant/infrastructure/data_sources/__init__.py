@@ -1,15 +1,13 @@
 """Data source adapters with fallback registry."""
 from __future__ import annotations
 
-import asyncio
-
 from alphaquant.infrastructure.data_sources.alpha_vantage import AlphaVantageSource
 from alphaquant.infrastructure.data_sources.base import DataSourceInterface
 from alphaquant.infrastructure.data_sources.finnhub import FinnhubSource
 from alphaquant.infrastructure.data_sources.news import NewsAPISource
 from alphaquant.infrastructure.data_sources.sec_edgar import SECEdgarSource
 from alphaquant.infrastructure.data_sources.yahoo import YahooFinanceSource
-from alphaquant.exceptions import AllDataSourcesDown, PartialDataFailure
+from alphaquant.exceptions import AllDataSourcesDown
 from alphaquant.models.company import Company
 from alphaquant.models.financial import FinancialStatements
 from alphaquant.models.market import MarketData

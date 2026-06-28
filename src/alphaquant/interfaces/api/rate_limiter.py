@@ -1,10 +1,9 @@
-"""In-process token-bucket rate limiter (spec §5.4).
+"""进程内的令牌桶限流器(规范 §5.4)。
 
-10 requests/minute per client IP. Pure Python (no Redis, no slowapi).
+每客户端 IP 每分钟 10 个请求。纯 Python(无 Redis,无 slowapi)。
 
-A token bucket refills at a constant rate up to a maximum capacity. Each
-request consumes one token; if the bucket is empty, the request is rejected
-with HTTP 429 Too Many Requests.
+令牌桶以恒定速率补充至最大容量。每个请求消耗一个令牌;
+如果桶为空,则以 HTTP 429 Too Many Requests 拒绝请求。
 """
 from __future__ import annotations
 
@@ -16,8 +15,8 @@ from fastapi import HTTPException, Request
 
 
 RATE_LIMIT_PER_MINUTE = 10
-RATE_LIMIT_CAPACITY = RATE_LIMIT_PER_MINUTE  # burst == sustained rate
-REFILL_INTERVAL_SECONDS = 60.0 / RATE_LIMIT_PER_MINUTE  # 6 seconds per token
+RATE_LIMIT_CAPACITY = RATE_LIMIT_PER_MINUTE  # 突发 == 持续速率
+REFILL_INTERVAL_SECONDS = 60.0 / RATE_LIMIT_PER_MINUTE  # 每个令牌 6 秒
 
 
 @dataclass
@@ -27,10 +26,10 @@ class _Bucket:
 
 
 class TokenBucketRateLimiter:
-    """Per-key token bucket limiter. Thread-safe.
+    """每键的令牌桶限流器。线程安全。
 
-    Keys are typically client IP addresses. Stored in-process; the bucket
-    dict is protected by a lock for concurrent FastAPI workers.
+    键通常是客户端 IP 地址。存储在进程内;桶字典由锁保护以支持
+    并发的 FastAPI 工作线程。
     """
 
     def __init__(self, capacity: int = RATE_LIMIT_CAPACITY) -> None:
@@ -42,7 +41,7 @@ class TokenBucketRateLimiter:
         elapsed = now - bucket.last_refill
         if elapsed <= 0:
             return
-        # Tokens added proportional to elapsed time, capped at capacity.
+        # 添加的令牌与经过的时间成正比,以容量为上限。
         bucket.tokens = min(
             self._capacity,
             bucket.tokens + elapsed / REFILL_INTERVAL_SECONDS,
@@ -50,7 +49,7 @@ class TokenBucketRateLimiter:
         bucket.last_refill = now
 
     def consume(self, key: str, tokens: float = 1.0) -> None:
-        """Consume ``tokens`` from the bucket for ``key`` or raise 429."""
+        """为 ``key`` 从桶中消耗 ``tokens``,否则抛出 429。"""
         now = time.monotonic()
         with self._lock:
             bucket = self._buckets.get(key)
@@ -62,30 +61,30 @@ class TokenBucketRateLimiter:
             if bucket.tokens >= tokens:
                 bucket.tokens -= tokens
                 return
-            # Bucket empty: reject.
+            # 桶为空:拒绝。
             raise HTTPException(
                 status_code=429,
                 detail={
                     "code": "RATE_LIMITED",
-                    "message": "Rate limit exceeded: max 10 requests/minute per client",
+                    "message": "超出速率限制:每个客户端每分钟最多 10 个请求",
                 },
             )
 
 
-# Module-level singleton — one limiter per process.
+# 模块级单例 —— 每个进程一个限流器。
 _rate_limiter = TokenBucketRateLimiter()
 
 
 def rate_limit_analyze(request: Request) -> None:
-    """FastAPI dependency: enforce the per-IP rate limit on /analyze."""
-    # ``request.client`` may be None in some test harnesses; fall back to a
-    # sentinel key so the limiter still functions.
+    """FastAPI 依赖项:在 /analyze 上强制按 IP 速率限制。"""
+    # 在某些测试工具中 ``request.client`` 可能为 None;回退到 sentinel 键,
+    # 以确保限流器仍能工作。
     client = request.client
     key = client.host if client is not None else "unknown"
     _rate_limiter.consume(key)
 
 
 def reset_rate_limiter() -> None:
-    """Test helper: clear all per-IP buckets."""
+    """测试辅助函数:清除所有按 IP 的桶。"""
     with _rate_limiter._lock:
         _rate_limiter._buckets.clear()

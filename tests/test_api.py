@@ -1,13 +1,11 @@
-"""Tests for FastAPI app + CLI entry points.
+"""FastAPI 应用 + CLI 入口的测试。
 
-The tests focus on wiring and behavior at the entry-point layer:
-- App loads, has the expected routes, and the health endpoint works without
-  touching the analysis Flow.
-- The analyze endpoint maps domain exceptions to the correct HTTP status codes
-  per spec §5.2.
-- The analyze endpoint returns a well-formed AnalyzeResponse on success.
-- The CLI exits with the correct status codes per the task brief.
-- run_analysis / run_analysis_async wire the Flow correctly.
+测试侧重于入口层的连接和行为:
+- 应用加载,具有预期的路由,健康端点工作正常且不触及分析 Flow。
+- analyze 端点按规范 §5.2 将领域异常映射到正确的 HTTP 状态码。
+- analyze 端点在成功时返回格式良好的 AnalyzeResponse。
+- CLI 按任务说明退出正确的状态码。
+- run_analysis / run_analysis_async 正确连接 Flow。
 """
 from __future__ import annotations
 
@@ -352,7 +350,7 @@ def test_run_analysis_async_returns_report():
         flow_instance = MockFlow.return_value
         flow_instance.state.report = report
 
-        async def _fake_kickoff_with_timeout(inputs):
+        async def _fake_kickoff_with_timeout(inputs, progress_callback=None):
             return None
 
         flow_instance.kickoff_with_timeout = _fake_kickoff_with_timeout
@@ -369,7 +367,7 @@ def test_run_analysis_async_raises_when_no_report():
         flow_instance = MockFlow.return_value
         flow_instance.state.report = None
 
-        async def _fake_kickoff_with_timeout(inputs):
+        async def _fake_kickoff_with_timeout(inputs, progress_callback=None):
             return None
 
         flow_instance.kickoff_with_timeout = _fake_kickoff_with_timeout
@@ -484,7 +482,7 @@ def test_cli_output_flag_writes_to_file(capsys, tmp_path):
     body = json.loads(out_file.read_text())
     assert body["ticker"] == "AAPL"
     err = capsys.readouterr().err
-    assert f"Report written to {out_file}" in err
+    assert f"报告已写入 {out_file}" in err
 
 
 # ---------------------------------------------------------------------------

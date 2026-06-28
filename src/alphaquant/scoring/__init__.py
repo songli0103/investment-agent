@@ -1,8 +1,7 @@
-"""Scoring module — only deterministic helpers used by tools and LLM tools remain.
+"""评分模块 —— 仅保留工具和 LLM 工具使用的确定性辅助函数。
 
-Sub-project 3: `rating`, `competitive`, `risk_score` modules removed (LLM-driven now).
-`dcf` and `financial_health` remain because the ValuationAnalyst and ReportWriter
-agents can call them as tools during reasoning.
+子项目 3:`rating`、`competitive`、`risk_score` 模块已移除(现由 LLM 驱动)。
+`dcf` 和 `financial_health` 保留,因为估值分析师和报告撰写代理可以在推理过程中将它们作为工具调用。
 """
 from alphaquant.scoring import dcf, financial_health
 

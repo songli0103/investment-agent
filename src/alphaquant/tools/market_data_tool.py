@@ -1,4 +1,4 @@
-"""CrewAI tool wrapper for market data."""
+"""CrewAI 市场数据工具包装器。"""
 from __future__ import annotations
 
 from crewai.tools import BaseTool
@@ -11,12 +11,12 @@ TOOL_TIMEOUT_SECONDS = 30.0
 
 
 class MarketDataInput(BaseModel):
-    ticker: str = Field(..., description="Stock ticker symbol, e.g. 'AAPL'")
+    ticker: str = Field(..., description="股票代码,例如 'AAPL'")
 
 
 class MarketDataTool(BaseTool):
     name: str = "market_data_lookup"
-    description: str = "Look up real-time market data for a US stock ticker (price, P/E, market cap, volume, 52-week range, beta)."
+    description: str = "查询美股 ticker 的实时市场数据(价格、P/E、市值、成交量、52 周区间、beta)。"
 
     def _run(self, ticker: str) -> str:
         import asyncio

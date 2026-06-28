@@ -1,4 +1,4 @@
-"""Tests for the SQLite persistence layer."""
+"""SQLite 持久化层的测试。"""
 from __future__ import annotations
 
 import json
@@ -324,3 +324,102 @@ class TestNullableConfidence:
         db.insert_report("TEST", rep)
         rows = db.get_history()
         assert rows[0].confidence == 80
+
+
+# ---------------------------------------------------------------------------
+# get_latest_report / get_latest_reports
+# ---------------------------------------------------------------------------
+
+
+def test_get_latest_report_empty_db(tmp_path) -> None:
+    """get_latest_report on an empty DB must return None, not raise."""
+    db = DB(tmp_path / "empty.db")
+    db.init()
+    assert db.get_latest_report() is None
+    assert db.get_latest_report(ticker="AAPL") is None
+
+
+def test_get_latest_report_returns_most_recent(tmp_path) -> None:
+    """get_latest_report orders by generated_at DESC, id DESC."""
+    db = DB(tmp_path / "latest.db")
+    db.init()
+    older = _make_report(
+        report_id="11111111-1111-1111-1111-111111111111",
+        ticker="AAPL",
+        generated_at=datetime(2026, 6, 20, 10, 0, 0),
+    )
+    newer = _make_report(
+        report_id="22222222-2222-2222-2222-222222222222",
+        ticker="AAPL",
+        generated_at=datetime(2026, 6, 21, 10, 0, 0),
+        rating="Hold",
+    )
+    db.insert_report("AAPL", older)
+    db.insert_report("AAPL", newer)
+    latest = db.get_latest_report()
+    assert latest is not None
+    assert latest.rating == "Hold"
+    # ReportRecord stores report_id inside the JSON; deserialize to confirm.
+    parsed = InvestmentReport.model_validate_json(latest.report_json)
+    assert parsed.report_id == "22222222-2222-2222-2222-222222222222"
+
+
+def test_get_latest_report_filters_by_ticker(tmp_path) -> None:
+    """Ticker filter ignores other symbols even if newer."""
+    db = DB(tmp_path / "filter.db")
+    db.init()
+    db.insert_report(
+        "MSFT",
+        _make_report(
+            report_id="33333333-3333-3333-3333-333333333333",
+            ticker="MSFT",
+            generated_at=datetime(2026, 6, 22, 10, 0, 0),
+        ),
+    )
+    db.insert_report(
+        "AAPL",
+        _make_report(
+            report_id="44444444-4444-4444-4444-444444444444",
+            ticker="AAPL",
+            generated_at=datetime(2026, 6, 20, 10, 0, 0),
+        ),
+    )
+    aapl = db.get_latest_report(ticker="AAPL")
+    assert aapl is not None
+    assert aapl.ticker == "AAPL"
+    parsed = InvestmentReport.model_validate_json(aapl.report_json)
+    assert parsed.report_id == "44444444-4444-4444-4444-444444444444"
+
+
+def test_get_latest_reports_caps_at_limit(tmp_path) -> None:
+    """get_latest_reports(limit=N) returns at most N rows, newest first."""
+    db = DB(tmp_path / "recent.db")
+    db.init()
+    expected_ids: list[str] = []
+    for i in range(7):
+        rid = f"55555555-5555-5555-5555-{i:012d}"
+        expected_ids.append(rid)
+        db.insert_report(
+            "AAPL",
+            _make_report(
+                report_id=rid,
+                ticker="AAPL",
+                generated_at=datetime(2026, 6, 15) + timedelta(hours=i),
+            ),
+        )
+    rows = db.get_latest_reports(limit=3)
+    assert len(rows) == 3
+    # Newest first: i=6, i=5, i=4
+    parsed_ids = [
+        InvestmentReport.model_validate_json(r.report_json).report_id
+        for r in rows
+    ]
+    assert parsed_ids == [expected_ids[6], expected_ids[5], expected_ids[4]]
+
+
+def test_get_latest_reports_zero_limit_returns_empty(tmp_path) -> None:
+    """Edge case: limit=0 returns no rows (not all rows)."""
+    db = DB(tmp_path / "zero.db")
+    db.init()
+    db.insert_report("AAPL", _make_report())
+    assert db.get_latest_reports(limit=0) == []

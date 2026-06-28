@@ -1,7 +1,6 @@
 """SEC EDGAR adapter for raw filings."""
 from __future__ import annotations
 
-import asyncio
 import re
 
 import httpx

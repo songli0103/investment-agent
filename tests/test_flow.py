@@ -1,4 +1,4 @@
-"""Tests for alphaquant.flows.analysis_flow AnalysisFlow orchestration."""
+"""alphaquant.flows.analysis_flow AnalysisFlow 编排的测试。"""
 from __future__ import annotations
 
 import asyncio
@@ -626,6 +626,207 @@ class TestFlowKickoff:
             with pytest.raises(asyncio.TimeoutError):
                 _run(flow.kickoff_with_timeout(inputs={"ticker": "AAPL"}))
 
+    def test_429_raises_llm_rate_limited(self):
+        """A 429 / Token-Plan-exhausted error from the LLM must surface as
+        ``LLMRateLimited`` (mapped to HTTP 503) so the frontend can show
+        a clear message instead of a multi-minute timeout.
+
+        CrewAI sometimes re-raises the upstream 429 as
+        ``AttributeError: 'NoneType' object has no attribute 'choices'``
+        because the LLM SDK returns an error body instead of a normal
+        response. We test both shapes.
+        """
+        from alphaquant.exceptions import CrewExecutionError, LLMRateLimited
+
+        for raw_error in [
+            "API Error: 429 rate_limit_error: Token Plan 用量上限",
+            "API Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}",
+            "AttributeError: 'NoneType' object has no attribute 'choices'",
+        ]:
+            flow = AnalysisFlow()
+            with patch("alphaquant.flows.analysis_flow.AnalysisCrew") as MockCrew:
+                MockCrew.return_value.kickoff.side_effect = RuntimeError(raw_error)
+                if "choices" in raw_error or "429" in raw_error:
+                    with pytest.raises(LLMRateLimited):
+                        _run(
+                            flow.kickoff_with_timeout(inputs={"ticker": "AAPL"})
+                        )
+                else:
+                    with pytest.raises(CrewExecutionError):
+                        _run(
+                            flow.kickoff_with_timeout(inputs={"ticker": "AAPL"})
+                        )
+
+    def test_progress_callback_fires_for_all_steps(
+        self,
+        sample_company,
+        sample_market,
+        sample_financial,
+        sample_competitor_analysis,
+    ):
+        """kickoff_with_timeout must invoke the progress callback at every
+        documented step boundary, in the expected order, with valid states.
+        """
+        flow = AnalysisFlow()
+        events: list[tuple[str, str]] = []
+
+        def on_progress(step: str, state: str) -> None:
+            events.append((step, state))
+
+        company_json = sample_company.model_dump_json()
+        market_json = sample_market.model_dump_json()
+        news_json = "[]"
+        financial_json = sample_financial.model_dump_json()
+
+        with patch(
+            "alphaquant.tools.company_lookup_tool.CompanyLookupTool._run",
+            new=lambda self, ticker: company_json,
+        ), patch(
+            "alphaquant.tools.market_data_tool.MarketDataTool._run",
+            new=lambda self, ticker: market_json,
+        ), patch(
+            "alphaquant.tools.news_tool.NewsTool._run",
+            new=lambda self, ticker: news_json,
+        ), patch(
+            "alphaquant.tools.financial_tool.FinancialTool._run",
+            new=lambda self, ticker: financial_json,
+        ), _patch_competitor_tool("No peer data available"), \
+             patch("alphaquant.flows.analysis_flow.AnalysisCrew") as MockCrew:
+
+            fake_result = MagicMock()
+            fake_result.tasks_output = _build_fake_task_output(
+                sample_company,
+                sample_market,
+                sample_financial,
+                sample_competitor_analysis,
+            )
+            MockCrew.return_value.kickoff.return_value = fake_result
+
+            _run(
+                flow.kickoff_with_timeout(
+                    inputs={"ticker": "AAPL"},
+                    progress_callback=on_progress,
+                )
+            )
+
+        steps = [step for step, _ in events]
+        # Every documented step must be emitted at least once.
+        assert "validate_ticker" in steps
+        assert "run_crew" in steps
+        assert "parse_crew_output" in steps
+        assert "compute_analyses" in steps
+        assert "assemble_report" in steps
+        # Each step must reach "complete" (the Flow finished successfully).
+        for step in (
+            "validate_ticker",
+            "run_crew",
+            "parse_crew_output",
+            "compute_analyses",
+            "assemble_report",
+        ):
+            assert (step, "complete") in events, f"step {step} did not complete"
+        # And each must transition through "running" before "complete".
+        for step in (
+            "validate_ticker",
+            "run_crew",
+            "parse_crew_output",
+            "compute_analyses",
+            "assemble_report",
+        ):
+            assert (step, "running") in events, f"step {step} never reached running"
+        # Ordering: validate_ticker complete must precede run_crew complete.
+        assert events.index(("validate_ticker", "complete")) < events.index(
+            ("run_crew", "complete")
+        )
+        assert events.index(("run_crew", "complete")) < events.index(
+            ("assemble_report", "complete")
+        )
+
+    def test_progress_callback_optional(
+        self,
+        sample_company,
+        sample_market,
+        sample_financial,
+        sample_competitor_analysis,
+    ):
+        """kickoff_with_timeout must work without a progress callback (FastAPI path)."""
+        flow = AnalysisFlow()
+        company_json = sample_company.model_dump_json()
+        market_json = sample_market.model_dump_json()
+
+        with patch(
+            "alphaquant.tools.company_lookup_tool.CompanyLookupTool._run",
+            new=lambda self, ticker: company_json,
+        ), patch(
+            "alphaquant.tools.market_data_tool.MarketDataTool._run",
+            new=lambda self, ticker: market_json,
+        ), patch(
+            "alphaquant.tools.news_tool.NewsTool._run",
+            new=lambda self, ticker: "[]",
+        ), patch(
+            "alphaquant.tools.financial_tool.FinancialTool._run",
+            new=lambda self, ticker: sample_financial.model_dump_json(),
+        ), _patch_competitor_tool("No peer data available"), \
+             patch("alphaquant.flows.analysis_flow.AnalysisCrew") as MockCrew:
+            fake_result = MagicMock()
+            fake_result.tasks_output = _build_fake_task_output(
+                sample_company,
+                sample_market,
+                sample_financial,
+                sample_competitor_analysis,
+            )
+            MockCrew.return_value.kickoff.return_value = fake_result
+            # No progress_callback kwarg — must not raise.
+            _run(flow.kickoff_with_timeout(inputs={"ticker": "AAPL"}))
+        assert flow.state.report is not None
+
+    def test_progress_callback_exception_is_swallowed(
+        self,
+        sample_company,
+        sample_market,
+        sample_financial,
+        sample_competitor_analysis,
+    ):
+        """A buggy progress callback must not crash the Flow."""
+        flow = AnalysisFlow()
+
+        def buggy(step: str, state: str) -> None:
+            raise RuntimeError("UI broken")
+
+        company_json = sample_company.model_dump_json()
+        market_json = sample_market.model_dump_json()
+
+        with patch(
+            "alphaquant.tools.company_lookup_tool.CompanyLookupTool._run",
+            new=lambda self, ticker: company_json,
+        ), patch(
+            "alphaquant.tools.market_data_tool.MarketDataTool._run",
+            new=lambda self, ticker: market_json,
+        ), patch(
+            "alphaquant.tools.news_tool.NewsTool._run",
+            new=lambda self, ticker: "[]",
+        ), patch(
+            "alphaquant.tools.financial_tool.FinancialTool._run",
+            new=lambda self, ticker: sample_financial.model_dump_json(),
+        ), _patch_competitor_tool("No peer data available"), \
+             patch("alphaquant.flows.analysis_flow.AnalysisCrew") as MockCrew:
+            fake_result = MagicMock()
+            fake_result.tasks_output = _build_fake_task_output(
+                sample_company,
+                sample_market,
+                sample_financial,
+                sample_competitor_analysis,
+            )
+            MockCrew.return_value.kickoff.return_value = fake_result
+            _run(
+                flow.kickoff_with_timeout(
+                    inputs={"ticker": "AAPL"},
+                    progress_callback=buggy,
+                )
+            )
+        # Flow still produced a report despite the broken callback.
+        assert flow.state.report is not None
+
 
 # ---------------------------------------------------------------------------
 # run_crew step (sub-project 1 thin shell)
@@ -1083,6 +1284,164 @@ class TestParseCrewOutput:
         assert state.competitor is None
         assert state.risk is None
         assert state.valuation is None
+        assert "report_writer_unavailable" in state.errors
+
+    def test_parse_crew_output_extracts_writer_output_from_raw_json(self):
+        """Sub-3-followup: the report_writer task now emits text (not
+        output_pydantic). When the LLM outputs a pure JSON payload,
+        ``_extract_writer_output`` parses it into ReportWriterOutput.
+        """
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+        from alphaquant.models.report import ReportWriterOutput
+        from alphaquant.models.company import Company
+        from alphaquant.models.market import MarketData
+        from alphaquant.models.financial import FinancialStatements
+        from datetime import datetime
+        from decimal import Decimal
+
+        company = Company(
+            ticker="AAPL", name="Apple Inc.", exchange="NASDAQ",
+            sector="Technology", industry="Consumer Electronics",
+            market_cap=3_000_000_000_000,
+        )
+        market = MarketData(
+            ticker="AAPL", as_of=datetime(2026, 1, 1),
+            price=Decimal("150"), change_pct=0.0, volume=0,
+            market_cap=3_000_000_000_000, source="yahoo",
+        )
+        financial = FinancialStatements(ticker="AAPL")
+        json_payload = (
+            '{"rating": "Buy", "confidence": 75, "investment_horizon": "medium", '
+            '"catalysts": ["Earnings beat"], "markdown": "## Summary\\nTest report."}'
+        )
+
+        class _FakeTask:
+            def __init__(self, raw="", pyd_obj=None):
+                self.pydantic = pyd_obj
+                self.raw = raw
+
+        class _FakeResult:
+            tasks_output = [
+                _FakeTask(raw=company.model_dump_json()),
+                _FakeTask(raw=market.model_dump_json()),
+                _FakeTask(raw="[]"),
+                _FakeTask(raw=financial.model_dump_json()),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=json_payload),
+            ]
+
+        state = AnalysisState(ticker="AAPL")
+        parse_crew_output(_FakeResult(), state)
+        assert isinstance(state.writer_output, ReportWriterOutput)
+        assert state.writer_output.rating == "Buy"
+        assert state.writer_output.confidence == 75
+        assert "report_writer_unavailable" not in state.errors
+
+    def test_parse_crew_output_extracts_writer_output_from_embedded_json(self):
+        """When the LLM wraps the JSON in prose / a markdown code fence,
+        ``_extract_writer_output`` still finds and parses the first JSON
+        object via the balanced-brace walker.
+        """
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+        from alphaquant.models.report import ReportWriterOutput
+        from alphaquant.models.company import Company
+        from alphaquant.models.market import MarketData
+        from alphaquant.models.financial import FinancialStatements
+        from datetime import datetime
+        from decimal import Decimal
+
+        company = Company(
+            ticker="AAPL", name="Apple Inc.", exchange="NASDAQ",
+            sector="Technology", industry="Consumer Electronics",
+            market_cap=3_000_000_000_000,
+        )
+        market = MarketData(
+            ticker="AAPL", as_of=datetime(2026, 1, 1),
+            price=Decimal("150"), change_pct=0.0, volume=0,
+            market_cap=3_000_000_000_000, source="yahoo",
+        )
+        financial = FinancialStatements(ticker="AAPL")
+
+        # Markdown prose + JSON object embedded mid-text + more prose.
+        raw = (
+            "## Investment Report\n\n"
+            "Below is the synthesized analysis:\n\n"
+            '{"rating": "Hold", "confidence": 60, "investment_horizon": "medium", '
+            '"catalysts": ["Catalyst 1"], "markdown": "## Body"}.\n\n'
+            "## Confidence Rationale\n"
+            "5/5 data sources present.\n"
+        )
+
+        class _FakeTask:
+            def __init__(self, raw=""):
+                self.pydantic = None
+                self.raw = raw
+
+        class _FakeResult:
+            tasks_output = [
+                _FakeTask(raw=company.model_dump_json()),
+                _FakeTask(raw=market.model_dump_json()),
+                _FakeTask(raw="[]"),
+                _FakeTask(raw=financial.model_dump_json()),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=raw),
+            ]
+
+        state = AnalysisState(ticker="AAPL")
+        parse_crew_output(_FakeResult(), state)
+        assert isinstance(state.writer_output, ReportWriterOutput)
+        assert state.writer_output.rating == "Hold"
+        assert state.writer_output.confidence == 60
+
+    def test_parse_crew_output_writer_output_unparseable_marks_error(self):
+        """When the report_writer raw text contains no parseable JSON, the
+        Flow sets ``state.writer_output = None`` and appends
+        ``"report_writer_unavailable"`` so ``synthesize_report`` uses its
+        fallback defaults.
+        """
+        from alphaquant.flows.analysis_flow import parse_crew_output, AnalysisState
+        from alphaquant.models.company import Company
+        from alphaquant.models.market import MarketData
+        from alphaquant.models.financial import FinancialStatements
+        from datetime import datetime
+        from decimal import Decimal
+
+        company = Company(
+            ticker="AAPL", name="Apple Inc.", exchange="NASDAQ",
+            sector="Technology", industry="Consumer Electronics",
+            market_cap=3_000_000_000_000,
+        )
+        market = MarketData(
+            ticker="AAPL", as_of=datetime(2026, 1, 1),
+            price=Decimal("150"), change_pct=0.0, volume=0,
+            market_cap=3_000_000_000_000, source="yahoo",
+        )
+        financial = FinancialStatements(ticker="AAPL")
+
+        class _FakeTask:
+            def __init__(self, raw=""):
+                self.pydantic = None
+                self.raw = raw
+
+        class _FakeResult:
+            tasks_output = [
+                _FakeTask(raw=company.model_dump_json()),
+                _FakeTask(raw=market.model_dump_json()),
+                _FakeTask(raw="[]"),
+                _FakeTask(raw=financial.model_dump_json()),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw=""),
+                _FakeTask(raw="This is not JSON at all, just prose."),
+            ]
+
+        state = AnalysisState(ticker="AAPL")
+        parse_crew_output(_FakeResult(), state)
+        assert state.writer_output is None
         assert "report_writer_unavailable" in state.errors
 
 

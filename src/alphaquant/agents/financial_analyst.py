@@ -1,4 +1,4 @@
-"""FinancialAnalyst Agent."""
+"""FinancialAnalyst 代理。"""
 from __future__ import annotations
 
 from crewai import Agent
@@ -9,14 +9,14 @@ from alphaquant.tools.financial_tool import FinancialTool
 
 def build_financial_analyst_agent(llm: LLM) -> Agent:
     return Agent(
-        role="Financial Statements Specialist",
+        role="财务报表专员",
         goal=(
-            "Fetch income statements, balance sheets, and cash flow statements "
-            "for a US stock ticker. Report data verbatim - do not calculate ratios."
+            "获取美股 ticker 的利润表、资产负债表和现金流量表。"
+            "逐字报告数据 —— 不计算财务比率。"
         ),
         backstory=(
-            "You are a financial data fetcher. You call financial_statements_lookup "
-            "exactly once with the ticker and return its JSON output as-is."
+            "你是一名财务数据获取员。你使用 ticker 调用 financial_statements_lookup 一次,"
+            "并按原样返回其 JSON 输出。"
         ),
         tools=[FinancialTool()],
         llm=llm,

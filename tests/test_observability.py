@@ -1,4 +1,4 @@
-"""Tests for alphaquant.observability (logger + cost tracker)."""
+"""alphaquant.observability(logger + 成本跟踪器)的测试。"""
 from __future__ import annotations
 
 import io

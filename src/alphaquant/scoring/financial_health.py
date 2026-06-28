@@ -1,11 +1,11 @@
-"""Financial health score (0–100)."""
+"""财务健康度评分(0–100)。"""
 from __future__ import annotations
 
 from alphaquant.models.financial import FinancialStatements
 
 
 def _profitability(statements: FinancialStatements) -> float:
-    """0-100 based on gross/net margin and ROE."""
+    """基于毛利率/净利率和 ROE 的 0-100 评分。"""
     if not statements.income_statements:
         return 50.0
     latest = statements.income_statements[0]
@@ -19,7 +19,7 @@ def _profitability(statements: FinancialStatements) -> float:
 
 
 def _growth(statements: FinancialStatements) -> float:
-    """YoY revenue growth score."""
+    """同比收入增长评分。"""
     if len(statements.income_statements) < 2:
         return 50.0
     latest = statements.income_statements[0]
@@ -31,7 +31,7 @@ def _growth(statements: FinancialStatements) -> float:
 
 
 def _solvency(statements: FinancialStatements) -> float:
-    """Debt-to-equity and current ratio."""
+    """资产负债率和流动比率。"""
     if not statements.balance_sheets:
         return 50.0
     bs = statements.balance_sheets[0]
@@ -42,7 +42,7 @@ def _solvency(statements: FinancialStatements) -> float:
 
 
 def _cash_quality(statements: FinancialStatements) -> float:
-    """OCF/NetIncome ratio."""
+    """OCF / 净利润 比率。"""
     if not statements.cash_flows or not statements.income_statements:
         return 50.0
     ocf = statements.cash_flows[0].operating_cash_flow
@@ -54,9 +54,9 @@ def _cash_quality(statements: FinancialStatements) -> float:
 
 
 def compute(statements: FinancialStatements) -> int:
-    """Overall financial health 0-100."""
+    """整体财务健康度 0-100。"""
     if not statements.income_statements:
-        return 50  # No data → neutral
+        return 50  # 无数据 → 中性
     scores = {
         "profitability": _profitability(statements),
         "growth": _growth(statements),

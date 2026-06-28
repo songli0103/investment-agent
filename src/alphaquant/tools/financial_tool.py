@@ -1,4 +1,4 @@
-"""CrewAI tool for financial statements."""
+"""CrewAI 财务报表工具。"""
 from __future__ import annotations
 
 from crewai.tools import BaseTool
@@ -11,7 +11,7 @@ TOOL_TIMEOUT_SECONDS = 30.0
 
 class FinancialTool(BaseTool):
     name: str = "financial_statements_lookup"
-    description: str = "Fetch financial statements (income statement, balance sheet, cash flow) for a US stock ticker."
+    description: str = "获取美股 ticker 的财务报表(利润表、资产负债表、现金流量表)。"
 
     def _run(self, ticker: str) -> str:
         import asyncio

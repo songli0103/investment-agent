@@ -1,8 +1,8 @@
-"""CrewAI tool for company metadata lookup.
+"""CrewAI 公司元数据查询工具。
 
-Wraps ``DataSourceRegistry.get_company`` and returns a JSON-serialized
-``Company`` instance, or an error string if the call fails or times out.
-Sub-project 2: this tool is what makes ``CompanyResolver`` a real data agent.
+包装 ``DataSourceRegistry.get_company`` 并返回 JSON 序列化的 ``Company`` 实例,
+如果调用失败或超时则返回错误字符串。
+子项目 2:此工具使 ``CompanyResolver`` 成为真正的数据代理。
 """
 from __future__ import annotations
 
@@ -12,16 +12,15 @@ from crewai.tools import BaseTool
 
 from alphaquant.infrastructure.data_sources import DataSourceRegistry
 
-# Per-tool fetch timeout. Whole-Flow timeout is set separately in
-# ``flows/analysis_flow.py:FLOW_TIMEOUT_SECONDS``.
+# 每个工具的获取超时。整个 Flow 的超时单独设置在
+# ``flows/analysis_flow.py:FLOW_TIMEOUT_SECONDS``。
 TOOL_TIMEOUT_SECONDS = 30.0
 
 
 class CompanyLookupTool(BaseTool):
     name: str = "company_lookup"
     description: str = (
-        "Resolve canonical company metadata (name, exchange, sector, industry, "
-        "market cap) for a US stock ticker symbol."
+        "解析美股股票代码的规范公司元数据(名称、交易所、行业分类、细分行业、市值)。"
     )
 
     def _run(self, ticker: str) -> str:

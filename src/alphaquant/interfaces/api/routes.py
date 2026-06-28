@@ -1,4 +1,4 @@
-"""FastAPI routes."""
+"""FastAPI 路由。"""
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +9,9 @@ from alphaquant.interfaces.api.rate_limiter import rate_limit_analyze
 from alphaquant.interfaces.api.schemas import AnalyzeRequest, AnalyzeResponse, HealthResponse
 from alphaquant.exceptions import (
     AllDataSourcesDown,
+    CrewExecutionError,
     InvalidTickerFormat,
+    LLMRateLimited,
     ReportGenerationError,
     TickerNotFound,
 )
@@ -22,11 +24,10 @@ VERSION = "1.0.0"
 
 @router.post("/analyze", response_model=AnalyzeResponse, dependencies=[Depends(rate_limit_analyze)])
 async def analyze(req: AnalyzeRequest):
-    """Run the full analysis flow. Delegates to the shared core in main.py.
+    """运行完整的分析流程。委托给 main.py 中的共享核心。
 
-    The shared ``run_analysis_async`` owns the Flow lifecycle, the 120s
-    timeout (§3.4), and the exception semantics. This layer only translates
-    domain exceptions to HTTP status codes per spec §5.2.
+    共享的 ``run_analysis_async`` 负责 Flow 生命周期、120 秒超时(§3.4)
+    和异常语义。本层只按规范 §5.2 将领域异常转换为 HTTP 状态码。
     """
     try:
         report = await run_analysis_async(req.ticker)
@@ -36,10 +37,16 @@ async def analyze(req: AnalyzeRequest):
         raise HTTPException(404, detail={"code": "TICKER_NOT_FOUND", "message": str(e)})
     except AllDataSourcesDown as e:
         raise HTTPException(503, detail={"code": "ALL_DATA_SOURCES_DOWN", "message": str(e)})
+    except LLMRateLimited as e:
+        # 429 / Token Plan 已用完:瞬时错误,用户可重试。
+        raise HTTPException(503, detail={"code": "LLM_RATE_LIMITED", "message": str(e)})
+    except CrewExecutionError as e:
+        # 非 429 的内部 CrewAI / LLM 失败。
+        raise HTTPException(500, detail={"code": "CREW_EXECUTION_ERROR", "message": str(e)})
     except ReportGenerationError as e:
         raise HTTPException(500, detail={"code": "REPORT_GENERATION_ERROR", "message": str(e)})
     except asyncio.TimeoutError:
-        raise HTTPException(504, detail={"code": "GATEWAY_TIMEOUT", "message": "Flow exceeded 120s budget"})
+        raise HTTPException(504, detail={"code": "GATEWAY_TIMEOUT", "message": "流程超过 600 秒预算"})
     return AnalyzeResponse(report_id=report.report_id, report=report)
 
 

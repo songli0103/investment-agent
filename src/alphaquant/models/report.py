@@ -1,4 +1,4 @@
-"""Final investment report model."""
+"""最终的投资报告模型。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -15,11 +15,10 @@ from alphaquant.models.valuation import ValuationResult
 
 
 class ReportWriterOutput(BaseModel):
-    """LLM-produced subset of InvestmentReport. Sub-project-3 revert: the
-    structured analysis fields (competitors, risk, valuation) are computed
-    deterministically by the flow; the LLM only produces the synthesis fields
-    below. The flow assembles the full ``InvestmentReport`` by combining this
-    with data fields and the deterministic analyses.
+    """LLM 产出的 InvestmentReport 子集。子项目 3 回退:结构化分析字段
+    (竞争、风险、估值)由 flow 确定性地计算;LLM 只产出下面的合成字段。
+    Flow 通过将此与数据字段以及确定性分析相结合来组装完整的
+    ``InvestmentReport``。
     """
 
     rating: Literal["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"]
@@ -31,15 +30,15 @@ class ReportWriterOutput(BaseModel):
     @field_validator("rating", mode="before")
     @classmethod
     def _coerce_rating(cls, v: Any) -> Any:
-        """LLM guard: coerce unknown rating values to 'Hold' so the flow
-        does not crash. See ``CompetitorAnalysis._coerce_method`` for the
-        established pattern."""
+        """LLM 守卫:将未知的 rating 值强制转换为 'Hold',以避免 flow 崩溃。
+        参见 ``CompetitorAnalysis._coerce_method`` 了解已建立的模式。
+        """
         allowed = {"Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"}
         return v if v in allowed else "Hold"
 
 
 class InvestmentReport(BaseModel):
-    """Top-level investment research report output."""
+    """顶层投资研究报告输出。"""
 
     report_id: str = Field(..., description="UUID4")
     ticker: str

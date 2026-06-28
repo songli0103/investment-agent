@@ -1,15 +1,14 @@
-"""CrewAI tool for competitor identification."""
+"""CrewAI 竞争对手识别工具。"""
 from __future__ import annotations
 
 from crewai.tools import BaseTool
 
-from alphaquant.infrastructure.data_sources import DataSourceRegistry
 from alphaquant.models.competitor import Competitor
 
 
 class CompetitorTool(BaseTool):
     name: str = "competitor_lookup"
-    description: str = "Identify top 3 competitors for a given ticker in the same GICS industry. Returns peer company data."
+    description: str = "为给定 ticker 识别同一 GICS 行业中的前 3 名竞争对手。返回对等公司数据。"
 
     def _run(self, ticker: str) -> str:
         import asyncio

@@ -1,4 +1,4 @@
-"""LLM token usage and cost tracking."""
+"""LLM token 使用量与成本跟踪。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,21 +10,21 @@ from alphaquant.infrastructure.config import get_settings
 log = structlog.get_logger()
 
 
-# Pricing (USD per 1M tokens) is sourced from Settings so operators can override
-# via env vars (MINIMAX_INPUT_PRICE_PER_M / MINIMAX_OUTPUT_PRICE_PER_M).
+# 单价(美元 / 百万 token)从 Settings 中读取,运维人员可通过环境变量
+# (MINIMAX_INPUT_PRICE_PER_M / MINIMAX_OUTPUT_PRICE_PER_M) 进行覆盖。
 _settings = get_settings()
 INPUT_PRICE_PER_M: float = _settings.minimax_input_price_per_m
 OUTPUT_PRICE_PER_M: float = _settings.minimax_output_price_per_m
 
-# Guard so the placeholder warning fires exactly once per process.
+# 守卫变量,确保占位符警告在每个进程中恰好触发一次。
 _placeholder_warning_emitted = False
 
 
 def _warn_if_placeholder_pricing() -> None:
-    """Emit a single structlog warning if pricing is still at the placeholder defaults.
+    """如果价格仍为占位符默认值,则发出一次 structlog 警告。
 
-    Spec §4.4 flagged these as placeholders. We refuse to silently publish wrong
-    numbers — operators must explicitly opt out by overriding the env vars.
+    规范 §4.4 将这些值标记为占位符。我们拒绝静默发布错误的数字——
+    运维人员必须显式通过覆盖环境变量来退出该警告。
     """
     global _placeholder_warning_emitted
     if _placeholder_warning_emitted:
@@ -34,7 +34,7 @@ def _warn_if_placeholder_pricing() -> None:
             "cost_tracker_using_placeholder_pricing",
             input_price_per_m=INPUT_PRICE_PER_M,
             output_price_per_m=OUTPUT_PRICE_PER_M,
-            hint="Set MINIMAX_INPUT_PRICE_PER_M and MINIMAX_OUTPUT_PRICE_PER_M to verified values.",
+            hint="请将 MINIMAX_INPUT_PRICE_PER_M 和 MINIMAX_OUTPUT_PRICE_PER_M 设置为已核实的数值。",
         )
     _placeholder_warning_emitted = True
 
@@ -59,7 +59,7 @@ def track_usage(
     latency_ms: int,
     request_id: str | None = None,
 ) -> TokenUsage:
-    """Log an LLM call's cost. Returns the TokenUsage object."""
+    """记录一次 LLM 调用的成本。返回 TokenUsage 对象。"""
     _warn_if_placeholder_pricing()
     usage = TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens)
     log.info(

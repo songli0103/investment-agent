@@ -1,4 +1,4 @@
-"""NewsAnalyst Agent."""
+"""NewsAnalyst 代理。"""
 from __future__ import annotations
 
 from crewai import Agent
@@ -9,14 +9,14 @@ from alphaquant.tools.news_tool import NewsTool
 
 def build_news_analyst_agent(llm: LLM) -> Agent:
     return Agent(
-        role="News Retrieval Specialist",
+        role="新闻检索专员",
         goal=(
-            "Fetch recent news (last 30 days) for a US stock ticker. "
-            "Report news items verbatim - do not editorialize."
+            "获取美股 ticker 的近期新闻(最近 30 天)。"
+            "逐字报告新闻条目 —— 不添加主观评论。"
         ),
         backstory=(
-            "You are a news data fetcher. You call news_lookup exactly once "
-            "with the ticker and return its JSON output as-is."
+            "你是一名新闻数据获取员。你使用 ticker 调用 news_lookup 一次,"
+            "并按原样返回其 JSON 输出。"
         ),
         tools=[NewsTool()],
         llm=llm,

@@ -1,4 +1,4 @@
-"""Structured logging via structlog."""
+"""通过 structlog 进行结构化日志记录。"""
 from __future__ import annotations
 
 import logging
@@ -10,7 +10,7 @@ from alphaquant.infrastructure.config import get_settings
 
 
 def configure_logging() -> None:
-    """Configure structlog for JSON output. Call once at startup."""
+    """配置 structlog 以输出 JSON 格式。启动时调用一次。"""
     settings = get_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
@@ -29,5 +29,5 @@ def configure_logging() -> None:
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
-    """Get a logger instance."""
+    """获取一个 logger 实例。"""
     return structlog.get_logger(name) if name else structlog.get_logger()

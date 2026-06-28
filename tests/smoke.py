@@ -1,15 +1,15 @@
-"""Smoke test for AlphaQuant MVP.
+"""AlphaQuant MVP 的烟雾测试。
 
-Usage: python -m tests.smoke
+用法:python -m tests.smoke
 
-Asserts:
-  1. Flow runs without crash
-  2. Output is InvestmentReport instance
-  3. All 8 sections populated
-  4. Rating is in valid set
-  5. Confidence 0-100
-  6. Markdown > 500 chars
-  7. Sources list non-empty
+断言:
+  1. Flow 运行不崩溃
+  2. 输出是 InvestmentReport 实例
+  3. 所有 8 个部分已填充
+  4. 评级在有效集合内
+  5. 置信度 0-100
+  6. Markdown 大于 500 字符
+  7. 来源列表非空
 """
 from __future__ import annotations
 

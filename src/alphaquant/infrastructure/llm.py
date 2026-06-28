@@ -1,4 +1,11 @@
-"""Unified LLM client configuration for MiniMax via LiteLLM."""
+"""通过 LiteLLM(OpenAI 兼容)统一配置 LLM 客户端。
+
+在运行时通过环境变量配置(参见 ``.env``):
+- ``LITELLM_MODEL``  — OpenAI 兼容形式的 provider/model
+  (例如 ``openai/MiniMax-M2.7-highspeed``)
+- ``LITELLM_API_BASE`` — OpenAI 兼容的 chat-completions 基础 URL
+- ``MINIMAX_API_KEY``  — bearer token(为向后兼容保留此名称)
+"""
 from __future__ import annotations
 
 import os
@@ -12,15 +19,15 @@ def get_llm(
     max_tokens: int = 4096,
     settings: Settings | None = None,
 ) -> LLM:
-    """Get a configured CrewAI LLM pointing at MiniMax-M3 via LiteLLM.
+    """通过 LiteLLM(OpenAI 兼容)获取配置好的 CrewAI LLM。
 
-    Args:
-        temperature: 0.0–1.0. Use 0.0 for deterministic numeric extraction.
-        max_tokens: Max output tokens.
-        settings: Optional Settings override (for testing).
+    参数:
+        temperature:0.0–1.0。对于确定性数字提取,使用 0.0。
+        max_tokens:最大输出 token 数。
+        settings:可选的 Settings 覆盖(用于测试)。
 
-    Returns:
-        LLM instance configured for MiniMax-M3.
+    返回:
+        根据 ``LITELLM_MODEL`` 中指定的模型配置的 LLM 实例。
     """
     cfg = settings or get_settings()
     os.environ.setdefault("OPENAI_API_KEY", cfg.minimax_api_key)

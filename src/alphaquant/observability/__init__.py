@@ -1,4 +1,4 @@
-"""Observability: logging and cost tracking."""
+"""可观测性:日志与成本跟踪。"""
 from alphaquant.observability.cost_tracker import TokenUsage, track_usage
 from alphaquant.observability.logger import configure_logging, get_logger
 
