@@ -29,7 +29,7 @@ from alphaquant.interfaces.frontend.components.charts import (
 )
 from alphaquant.interfaces.frontend.components.rating_card import render_rating_card
 from alphaquant.infrastructure.persistence import DB
-from alphaquant.main import run_analysis_async
+from alphaquant.core import run_analysis_async
 from alphaquant.models.report import InvestmentReport
 
 
