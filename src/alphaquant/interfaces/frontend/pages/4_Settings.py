@@ -64,7 +64,7 @@ try:
         file_name="alphaquant_reports.jsonl",
         mime="application/jsonl",
     )
-except Exception as exc:  # pragma: no cover - 导出尽力而为
+except Exception:  # pragma: no cover - 导出尽力而为
     st.error("构建 JSONL 导出失败。请查看服务器日志。")
 
 # --- 服务 -----------------------------------------------------------------
@@ -83,7 +83,7 @@ try:
         )
     else:
         st.write("**MINIMAX_API_KEY:** 已设置")
-except Exception as exc:
+except Exception:
     st.error(
         "无法加载服务配置。请检查 .env 文件是否存在并包含 MINIMAX_API_KEY。"
     )
